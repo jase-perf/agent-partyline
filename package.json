@@ -1,21 +1,20 @@
 {
   "name": "claude-party-line",
   "version": "0.1.0",
-  "description": "Shared-bus channel plugin for Claude Code inter-session messaging",
+  "description": "Transport-agnostic inter-session messaging for Claude Code via UDP multicast",
   "license": "MIT",
   "type": "module",
   "bin": "./src/server.ts",
   "scripts": {
     "start": "bun install --no-summary && bun src/server.ts",
-    "dev": "bun --watch src/server.ts",
+    "dev": "PARTY_LINE_DEBUG=1 bun --watch src/server.ts",
+    "dashboard": "bun dashboard/serve.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "better-sqlite3": "^11.0.0"
+    "@modelcontextprotocol/sdk": "^1.0.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.0",
     "typescript": "^5.5.0"
   }
 }

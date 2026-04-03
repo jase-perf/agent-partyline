@@ -1,31 +1,49 @@
-/** A registered session on the party line. */
-export interface Session {
-  name: string
-  pid: number
-  registered_at: string // ISO 8601
-}
+/** Message types on the party line. */
+export type MessageType = 'message' | 'request' | 'response' | 'status' | 'heartbeat' | 'announce'
 
-/** A message on the bus. */
-export interface BusMessage {
-  id: number
+/** The wire format for all party line messages. */
+export interface Envelope {
+  id: string
+  seq: number
   from: string
-  to: string // session name, comma-separated list, or "all"
+  to: string // session name, or "all" for broadcast
   type: MessageType
   body: string
   callback_id: string | null
-  response_to: string | null // callback_id this is responding to
-  created_at: string // ISO 8601
+  response_to: string | null
+  ts: string // ISO 8601
 }
 
-export type MessageType = 'message' | 'request' | 'response' | 'status'
-
-/** What gets delivered to Claude via channel notification. */
-export interface InboundMessage {
-  from: string
-  to: string
-  type: MessageType
-  body: string
-  callback_id?: string
-  response_to?: string
-  message_id: number
+/** A known session on the party line (tracked via heartbeats). */
+export interface KnownSession {
+  name: string
+  lastSeen: number // Date.now() timestamp
+  metadata?: SessionMetadata
 }
+
+/** Optional metadata a session can announce about itself. */
+export interface SessionMetadata {
+  description?: string
+  capabilities?: string[]
+}
+
+/** Configuration for the UDP multicast transport. */
+export interface TransportConfig {
+  multicastAddress: string
+  port: number
+  ttl: number
+  loopback: boolean
+  sendTwiceDelayMs: number
+}
+
+export const DEFAULT_TRANSPORT_CONFIG: TransportConfig = {
+  multicastAddress: '239.77.76.10',
+  port: 47100,
+  ttl: 0, // localhost only
+  loopback: true,
+  sendTwiceDelayMs: 50,
+}
+
+export const HEARTBEAT_INTERVAL_MS = 30_000
+export const SESSION_TIMEOUT_MS = 75_000 // ~2.5 heartbeat intervals
+export const DEDUP_WINDOW_MS = 60_000
