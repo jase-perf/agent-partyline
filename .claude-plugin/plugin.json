@@ -1,0 +1,11 @@
+{
+  "name": "party-line",
+  "description": "Shared-bus channel for Claude Code inter-session messaging. Sessions on the same machine can send messages to each other by name.",
+  "version": "0.1.0",
+  "keywords": [
+    "channel",
+    "messaging",
+    "inter-session",
+    "mcp"
+  ]
+}
