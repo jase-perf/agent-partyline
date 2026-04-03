@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Party Line — Dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --cyan: #39c5cf;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 13px;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  header h1 { font-size: 15px; font-weight: 600; color: var(--accent); }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    display: inline-block; margin-right: 4px;
+  }
+  .status-dot.online { background: var(--green); }
+  .status-dot.offline { background: var(--red); }
+  .conn-status { font-size: 11px; color: var(--text-dim); margin-left: auto; }
+
+  .main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* Sessions panel */
+  .sessions {
+    width: 220px;
+    border-right: 1px solid var(--border);
+    padding: 12px;
+    flex-shrink: 0;
+    overflow-y: auto;
+  }
+  .sessions h2 { font-size: 11px; text-transform: uppercase; color: var(--text-dim); margin-bottom: 8px; letter-spacing: 0.5px; }
+  .session-item {
+    padding: 6px 8px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .session-item:hover { background: var(--surface); }
+  .session-item .name { color: var(--text); }
+  .session-item .meta { color: var(--text-dim); font-size: 11px; }
+
+  /* Message feed */
+  .feed-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .feed {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 16px;
+    scroll-behavior: smooth;
+  }
+  .msg {
+    padding: 4px 0;
+    line-height: 1.5;
+    border-bottom: 1px solid transparent;
+  }
+  .msg:hover { background: var(--surface); border-radius: 3px; }
+  .msg .time { color: var(--text-dim); }
+  .msg .type { font-weight: 600; min-width: 72px; display: inline-block; }
+  .msg .type-message { color: var(--text); }
+  .msg .type-request { color: var(--yellow); }
+  .msg .type-response { color: var(--green); }
+  .msg .type-announce { color: var(--purple); }
+  .msg .type-status { color: var(--cyan); }
+  .msg .type-heartbeat { color: var(--text-dim); }
+  .msg .route { color: var(--accent); }
+  .msg .tag { color: var(--text-dim); font-size: 11px; }
+
+  /* Send bar */
+  .send-bar {
+    border-top: 1px solid var(--border);
+    padding: 10px 16px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .send-bar label { color: var(--text-dim); font-size: 11px; }
+  .send-bar input, .send-bar select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 12px;
+  }
+  .send-bar input:focus, .send-bar select:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .send-bar input.to { width: 120px; }
+  .send-bar input.msg { flex: 1; }
+  .send-bar select { width: 90px; }
+  .send-bar button {
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    padding: 6px 14px;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .send-bar button:hover { opacity: 0.9; }
+
+  /* Filters */
+  .filters {
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    font-size: 11px;
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+  .filters label { cursor: pointer; user-select: none; }
+  .filters input[type="checkbox"] { margin-right: 4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Party Line</h1>
+  <span class="conn-status" id="connStatus">connecting...</span>
+</header>
+
+<div class="main">
+  <div class="sessions">
+    <h2>Sessions</h2>
+    <div id="sessionList"><span style="color:var(--text-dim)">waiting for heartbeats...</span></div>
+  </div>
+
+  <div class="feed-container">
+    <div class="filters">
+      <label><input type="checkbox" id="showHeartbeats"> Show heartbeats</label>
+      <label><input type="checkbox" id="showAnnounce" checked> Show announces</label>
+      <label><input type="checkbox" id="autoscroll" checked> Auto-scroll</label>
+      <span id="msgCount" style="margin-left:auto">0 messages</span>
+    </div>
+    <div class="feed" id="feed"></div>
+    <div class="send-bar">
+      <label>To:</label>
+      <input class="to" id="sendTo" placeholder="session or all" value="all">
+      <label>Type:</label>
+      <select id="sendType">
+        <option value="message">message</option>
+        <option value="request">request</option>
+        <option value="status">status</option>
+      </select>
+      <input class="msg" id="sendMsg" placeholder="Type a message..." autofocus>
+      <button id="sendBtn">Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const feed = document.getElementById('feed');
+const sessionList = document.getElementById('sessionList');
+const connStatus = document.getElementById('connStatus');
+const msgCount = document.getElementById('msgCount');
+const showHeartbeats = document.getElementById('showHeartbeats');
+const showAnnounce = document.getElementById('showAnnounce');
+const autoscroll = document.getElementById('autoscroll');
+const sendTo = document.getElementById('sendTo');
+const sendType = document.getElementById('sendType');
+const sendMsg = document.getElementById('sendMsg');
+const sendBtn = document.getElementById('sendBtn');
+
+let totalMessages = 0;
+let ws;
+
+function esc(s) {
+  const el = document.createElement('span');
+  el.textContent = s;
+  return el.innerHTML;
+}
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(proto + '//' + location.host + '/ws');
+
+  ws.onopen = function() {
+    connStatus.textContent = 'connected';
+    connStatus.style.color = '#3fb950';
+  };
+
+  ws.onclose = function() {
+    connStatus.textContent = 'disconnected \u2014 reconnecting...';
+    connStatus.style.color = '#f85149';
+    setTimeout(connect, 2000);
+  };
+
+  ws.onmessage = function(e) {
+    var data = JSON.parse(e.data);
+    if (data.type === 'sessions') updateSessions(data.data);
+    else if (data.type === 'message') addMessage(data.data);
+  };
+}
+
+function updateSessions(sessions) {
+  if (sessions.length === 0) {
+    sessionList.textContent = 'no sessions';
+    return;
+  }
+  // Build DOM safely without innerHTML
+  sessionList.textContent = '';
+  sessions.forEach(function(s) {
+    var item = document.createElement('div');
+    item.className = 'session-item';
+    item.addEventListener('click', function() {
+      sendTo.value = s.name;
+      sendMsg.focus();
+    });
+
+    var dot = document.createElement('span');
+    dot.className = 'status-dot online';
+    item.appendChild(dot);
+
+    var nameEl = document.createElement('span');
+    nameEl.className = 'name';
+    nameEl.textContent = s.name;
+    item.appendChild(nameEl);
+
+    if (s.metadata && s.metadata.description) {
+      var meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = s.metadata.description;
+      item.appendChild(meta);
+    }
+
+    sessionList.appendChild(item);
+  });
+}
+
+function addMessage(msg) {
+  totalMessages++;
+  msgCount.textContent = totalMessages + ' messages';
+
+  if (msg.type === 'heartbeat' && !showHeartbeats.checked) return;
+  if (msg.type === 'announce' && !showAnnounce.checked) return;
+
+  var time = new Date(msg.ts).toLocaleTimeString();
+
+  var el = document.createElement('div');
+  el.className = 'msg';
+
+  var timeSpan = document.createElement('span');
+  timeSpan.className = 'time';
+  timeSpan.textContent = time;
+  el.appendChild(timeSpan);
+
+  el.appendChild(document.createTextNode(' '));
+
+  var typeSpan = document.createElement('span');
+  typeSpan.className = 'type type-' + msg.type;
+  typeSpan.textContent = msg.type;
+  el.appendChild(typeSpan);
+
+  el.appendChild(document.createTextNode(' '));
+
+  var routeSpan = document.createElement('span');
+  routeSpan.className = 'route';
+  routeSpan.textContent = msg.from + ' \u2192 ' + msg.to;
+  el.appendChild(routeSpan);
+
+  if (msg.callback_id) {
+    var cbTag = document.createElement('span');
+    cbTag.className = 'tag';
+    cbTag.textContent = ' [cb:' + msg.callback_id + ']';
+    el.appendChild(cbTag);
+  }
+
+  if (msg.response_to) {
+    var respTag = document.createElement('span');
+    respTag.className = 'tag';
+    respTag.textContent = ' [\u21a9' + msg.response_to + ']';
+    el.appendChild(respTag);
+  }
+
+  el.appendChild(document.createTextNode(' '));
+
+  var bodySpan = document.createElement('span');
+  bodySpan.className = 'body';  // Use textContent — body is untrusted
+  bodySpan.textContent = msg.body;
+  el.appendChild(bodySpan);
+
+  feed.appendChild(el);
+
+  if (autoscroll.checked) {
+    feed.scrollTop = feed.scrollHeight;
+  }
+}
+
+function doSend() {
+  var to = sendTo.value.trim();
+  var message = sendMsg.value.trim();
+  var type = sendType.value;
+  if (!to || !message) return;
+
+  ws.send(JSON.stringify({ action: 'send', to: to, message: message, type: type }));
+  sendMsg.value = '';
+  sendMsg.focus();
+}
+
+sendBtn.addEventListener('click', doSend);
+sendMsg.addEventListener('keydown', function(e) { if (e.key === 'Enter') doSend(); });
+
+connect();
+</script>
+</body>
+</html>
