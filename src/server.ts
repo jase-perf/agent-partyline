@@ -6,7 +6,6 @@
  * inter-session messaging.
  */
 
-import { hostname } from 'node:os'
 import { basename } from 'node:path'
 import { readFileSync } from 'fs'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
