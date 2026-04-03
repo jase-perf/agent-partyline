@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# ccpl — Launch Claude Code with the party-line channel
+#
+# Usage:
+#   ccpl              Start a new session
+#   ccpl research     Resume "research" session, or start a new one with that name
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+name="${1:-}"
+
+base_args=(
+    --dangerously-skip-permissions
+    --mcp-config "$SCRIPT_DIR/.mcp.json"
+    --dangerously-load-development-channels server:party-line
+)
+
+if [ -z "$name" ]; then
+    exec claude "${base_args[@]}"
+fi
+
+# Look for an existing session with this name
+session_id=""
+for f in ~/.claude/sessions/*.json; do
+    [ -f "$f" ] || continue
+    s_name=$(python3 -c "import json; print(json.load(open('$f')).get('name',''))" 2>/dev/null)
+    s_id=$(python3 -c "import json; print(json.load(open('$f')).get('sessionId',''))" 2>/dev/null)
+    if [ "$s_name" = "$name" ] && [ -n "$s_id" ]; then
+        session_id="$s_id"
+        break
+    fi
+done
+
+if [ -n "$session_id" ]; then
+    echo "Resuming session '$name' ($session_id)"
+    exec claude "${base_args[@]}" --name "$name" --resume "$session_id"
+else
+    echo "Starting new session '$name'"
+    exec claude "${base_args[@]}" --name "$name"
+fi
