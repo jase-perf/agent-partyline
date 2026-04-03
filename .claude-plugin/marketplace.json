@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-party-line",
+  "description": "Local marketplace for the Party Line inter-session messaging plugin",
+  "owner": {
+    "name": "Jase"
+  },
+  "plugins": [
+    {
+      "name": "party-line",
+      "description": "Shared-bus channel for Claude Code inter-session messaging via UDP multicast. Sessions on the same machine can send messages to each other by name.",
+      "source": "./",
+      "category": "development"
+    }
+  ]
+}
