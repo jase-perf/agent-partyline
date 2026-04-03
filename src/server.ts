@@ -7,6 +7,7 @@
  */
 
 import { hostname } from 'node:os'
+import { readFileSync } from 'fs'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
@@ -20,9 +21,51 @@ import type { Envelope, MessageType } from './types.js'
 
 // --- Session name resolution ---
 
+/** Walk up the process tree to find the Claude Code process and extract --name. */
+function resolveNameFromProcessTree(): string | null {
+  try {
+    let pid = process.ppid
+    // Walk up at most 5 levels to find the claude process
+    for (let i = 0; i < 5; i++) {
+      const cmdlineRaw = readFileSync(`/proc/${pid}/cmdline`).toString()
+      const args = cmdlineRaw.split('\0').filter(Boolean)
+
+      // Check if this is a claude process
+      const isClaude = args.some(arg => arg.endsWith('/claude') || arg === 'claude')
+      if (isClaude) {
+        // Look for --name or -n flag
+        for (let j = 0; j < args.length - 1; j++) {
+          if (args[j] === '--name' || args[j] === '-n') {
+            const name = args[j + 1]
+            if (name && !name.startsWith('-')) return name
+          }
+        }
+        // Found claude but no --name flag
+        return null
+      }
+
+      // Get parent PID from /proc/PID/stat (field 4)
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf-8')
+      const ppid = parseInt(stat.split(' ')[3]!, 10)
+      if (ppid <= 1) break // reached init
+      pid = ppid
+    }
+  } catch {
+    // /proc not available (non-Linux) or permission denied — fall through
+  }
+  return null
+}
+
 function resolveSessionName(): string {
+  // 1. Explicit env var (highest priority)
   if (process.env.PARTY_LINE_NAME) return process.env.PARTY_LINE_NAME
   if (process.env.CLAUDE_SESSION_NAME) return process.env.CLAUDE_SESSION_NAME
+
+  // 2. Auto-detect from parent Claude Code process tree
+  const treeResolved = resolveNameFromProcessTree()
+  if (treeResolved) return treeResolved
+
+  // 3. Fallback
   const host = process.env.HOSTNAME ?? hostname()
   return `${host}-${process.pid}`
 }
@@ -70,12 +113,11 @@ const mcp = new Server(
     },
     instructions: [
       `The party-line channel connects this session to other Claude Code sessions on the same machine via UDP multicast.`,
-      `This session is currently registered as "${sessionName}". If this name is not descriptive (e.g. it looks like "hostname-12345"), use party_line_set_name to choose a short, descriptive name based on your role (e.g. "discord", "research", "project-foo").`,
+      `This session is registered as "${sessionName}".`,
       ``,
       `Messages from other sessions arrive as <channel source="party-line" from="..." to="..." type="...">body</channel> tags.`,
       ``,
       `Available tools:`,
-      `- party_line_set_name: Set a human-readable name for this session on the party line`,
       `- party_line_send: Send a message to another session by name (or "all" for broadcast)`,
       `- party_line_request: Send a request and expect a response (includes a callback_id)`,
       `- party_line_respond: Reply to a request using its callback_id`,
