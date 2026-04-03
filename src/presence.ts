@@ -59,6 +59,13 @@ export class PresenceTracker {
         lastSeen: Date.now(),
         metadata: meta,
       })
+
+      // When we hear a new session announce, respond with our heartbeat
+      // so they discover us quickly (instead of waiting up to 30s)
+      if (envelope.type === 'announce' && envelope.from !== this.sessionName) {
+        const jitter = Math.floor(Math.random() * 400) + 100
+        setTimeout(() => void this.sendHeartbeat(), jitter)
+      }
     }
   }
 

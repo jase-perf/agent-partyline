@@ -6,6 +6,7 @@
  * inter-session messaging.
  */
 
+import { hostname } from 'node:os'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
@@ -22,8 +23,8 @@ import type { Envelope, MessageType } from './types.js'
 function resolveSessionName(): string {
   if (process.env.PARTY_LINE_NAME) return process.env.PARTY_LINE_NAME
   if (process.env.CLAUDE_SESSION_NAME) return process.env.CLAUDE_SESSION_NAME
-  const hostname = process.env.HOSTNAME ?? 'unknown'
-  return `${hostname}-${process.pid}`
+  const host = process.env.HOSTNAME ?? hostname()
+  return `${host}-${process.pid}`
 }
 
 const SESSION_NAME = resolveSessionName()
