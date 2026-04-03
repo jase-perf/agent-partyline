@@ -24,7 +24,7 @@ export class PartyLineMonitor {
   constructor(sessionName: string = 'dashboard', maxHistory: number = 500) {
     this.sessionName = sessionName
     this.maxHistory = maxHistory
-    this.transport = new UdpMulticastTransport(sessionName)
+    this.transport = new UdpMulticastTransport(sessionName, {}, true)
     this.presence = new PresenceTracker(this.transport, sessionName, {
       description: `Party Line Monitor: ${sessionName}`,
     })

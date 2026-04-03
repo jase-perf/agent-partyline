@@ -16,13 +16,15 @@ export class UdpMulticastTransport {
   private socket: Socket | null = null
   private config: TransportConfig
   private sessionName: string
+  private includeSelf: boolean
   private dedup = new Deduplicator()
   private onMessage: MessageHandler | null = null
   private pruneTimer: ReturnType<typeof setInterval> | null = null
 
-  constructor(sessionName: string, config: Partial<TransportConfig> = {}) {
+  constructor(sessionName: string, config: Partial<TransportConfig> = {}, includeSelf = false) {
     this.sessionName = sessionName
     this.config = { ...DEFAULT_TRANSPORT_CONFIG, ...config }
+    this.includeSelf = includeSelf
   }
 
   /** Start listening on the multicast group. */
@@ -45,8 +47,8 @@ export class UdpMulticastTransport {
         // Deduplicate (send-twice means we'll see each message twice)
         if (this.dedup.isDuplicate(envelope.id)) return
 
-        // Don't deliver our own messages back to ourselves
-        if (envelope.from === this.sessionName) return
+        // Don't deliver our own messages back to ourselves (unless includeSelf)
+        if (!this.includeSelf && envelope.from === this.sessionName) return
 
         this.onMessage?.(envelope)
       })
