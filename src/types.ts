@@ -39,7 +39,7 @@ export interface TransportConfig {
 export const DEFAULT_TRANSPORT_CONFIG: TransportConfig = {
   multicastAddress: '239.77.76.10',
   port: 47100,
-  ttl: 0, // localhost only
+  ttl: 1, // same-subnet only (TTL 0 is ideal but Bun's setsockopt rejects it)
   loopback: true,
   sendTwiceDelayMs: 50,
 }
