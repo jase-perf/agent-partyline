@@ -90,6 +90,14 @@ export class PresenceTracker {
     return Date.now() - session.lastSeen < SESSION_TIMEOUT_MS
   }
 
+  /** Rename this session and re-announce to the network. */
+  async rename(newName: string): Promise<void> {
+    this.sessions.delete(this.sessionName)
+    this.sessionName = newName
+    this.metadata = { ...this.metadata, description: `Claude Code session: ${newName}` }
+    await this.sendAnnounce()
+  }
+
   private async sendHeartbeat(): Promise<void> {
     const envelope = createEnvelope(
       this.sessionName,

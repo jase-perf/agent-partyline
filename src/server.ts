@@ -27,14 +27,14 @@ function resolveSessionName(): string {
   return `${host}-${process.pid}`
 }
 
-const SESSION_NAME = resolveSessionName()
+let sessionName = resolveSessionName()
 
 // --- Debug logging ---
 
 const DEBUG = process.env.PARTY_LINE_DEBUG === '1'
 function debug(msg: string): void {
   if (DEBUG) {
-    process.stderr.write(`[party-line:${SESSION_NAME}] ${msg}\n`)
+    process.stderr.write(`[party-line:${sessionName}] ${msg}\n`)
   }
 }
 
@@ -52,9 +52,9 @@ function recordMessage(envelope: Envelope): void {
 
 // --- Transport + Presence ---
 
-const transport = new UdpMulticastTransport(SESSION_NAME)
-const presence = new PresenceTracker(transport, SESSION_NAME, {
-  description: `Claude Code session: ${SESSION_NAME}`,
+const transport = new UdpMulticastTransport(sessionName)
+const presence = new PresenceTracker(transport, sessionName, {
+  description: `Claude Code session: ${sessionName}`,
 })
 
 // --- MCP Server ---
@@ -70,11 +70,12 @@ const mcp = new Server(
     },
     instructions: [
       `The party-line channel connects this session to other Claude Code sessions on the same machine via UDP multicast.`,
-      `This session is registered as "${SESSION_NAME}".`,
+      `This session is currently registered as "${sessionName}". If this name is not descriptive (e.g. it looks like "hostname-12345"), use party_line_set_name to choose a short, descriptive name based on your role (e.g. "discord", "research", "project-foo").`,
       ``,
       `Messages from other sessions arrive as <channel source="party-line" from="..." to="..." type="...">body</channel> tags.`,
       ``,
       `Available tools:`,
+      `- party_line_set_name: Set a human-readable name for this session on the party line`,
       `- party_line_send: Send a message to another session by name (or "all" for broadcast)`,
       `- party_line_request: Send a request and expect a response (includes a callback_id)`,
       `- party_line_respond: Reply to a request using its callback_id`,
@@ -97,9 +98,9 @@ function handleInbound(envelope: Envelope): void {
   if (envelope.type === 'heartbeat') return
 
   const isForUs =
-    envelope.to === SESSION_NAME ||
+    envelope.to === sessionName ||
     envelope.to === 'all' ||
-    envelope.to.split(',').map((s) => s.trim()).includes(SESSION_NAME)
+    envelope.to.split(',').map((s) => s.trim()).includes(sessionName)
 
   if (!isForUs) return
 
@@ -127,6 +128,21 @@ function handleInbound(envelope: Envelope): void {
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
+    {
+      name: 'party_line_set_name',
+      description:
+        'Set a human-readable name for this session on the party line. Choose a short, descriptive name based on your role (e.g. "discord", "research", "project-myapp").',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          name: {
+            type: 'string',
+            description: 'The new session name (short, lowercase, descriptive)',
+          },
+        },
+        required: ['name'],
+      },
+    },
     {
       name: 'party_line_send',
       description:
@@ -222,7 +238,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: 'text', text: 'Error: "to" and "message" are required.' }] }
       }
 
-      const envelope = createEnvelope(SESSION_NAME, to, 'message', message)
+      const envelope = createEnvelope(sessionName, to, 'message', message)
       await transport.send(envelope)
       recordMessage(envelope)
       debug(`send: to=${to} id=${envelope.id}`)
@@ -237,7 +253,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       const callbackId = generateCallbackId()
-      const envelope = createEnvelope(SESSION_NAME, to, 'request', message, callbackId)
+      const envelope = createEnvelope(sessionName, to, 'request', message, callbackId)
       await transport.send(envelope)
       recordMessage(envelope)
       debug(`request: to=${to} callback=${callbackId} id=${envelope.id}`)
@@ -263,7 +279,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
       }
 
-      const envelope = createEnvelope(SESSION_NAME, to, 'response', message, null, callbackId)
+      const envelope = createEnvelope(sessionName, to, 'response', message, null, callbackId)
       await transport.send(envelope)
       recordMessage(envelope)
       debug(`respond: to=${to} callback=${callbackId} id=${envelope.id}`)
@@ -276,7 +292,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: 'text', text: 'No sessions currently registered.' }] }
       }
       const lines = sessions.map((s) => {
-        const isSelf = s.name === SESSION_NAME ? ' (this session)' : ''
+        const isSelf = s.name === sessionName ? ' (this session)' : ''
         const desc = s.metadata?.description ? ` — ${s.metadata.description}` : ''
         return `- ${s.name}${isSelf}${desc} (last seen: ${new Date(s.lastSeen).toISOString()})`
       })
@@ -296,6 +312,37 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
         return `[${m.ts}] ${m.from} → ${m.to} (${m.type})${tag}${resp}: ${m.body}`
       })
       return { content: [{ type: 'text', text: lines.join('\n') }] }
+    }
+
+    case 'party_line_set_name': {
+      const newName = String(args?.name ?? '').trim().toLowerCase()
+      if (!newName || newName.length > 30) {
+        return { content: [{ type: 'text', text: 'Error: name must be 1-30 characters.' }] }
+      }
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(newName)) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Error: name must be lowercase alphanumeric with hyphens (e.g. "discord", "project-foo").',
+            },
+          ],
+        }
+      }
+
+      const oldName = sessionName
+      sessionName = newName
+      transport.rename(newName)
+      await presence.rename(newName)
+      debug(`renamed: ${oldName} → ${newName}`)
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Session renamed from "${oldName}" to "${newName}". Other sessions will see the new name.`,
+          },
+        ],
+      }
     }
 
     default:

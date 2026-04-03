@@ -82,6 +82,11 @@ export class UdpMulticastTransport {
     }, sendTwiceDelayMs)
   }
 
+  /** Update the session name (used when session renames itself). */
+  rename(newName: string): void {
+    this.sessionName = newName
+  }
+
   /** Stop listening and leave the multicast group. */
   stop(): void {
     if (this.pruneTimer) clearInterval(this.pruneTimer)
