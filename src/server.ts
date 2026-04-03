@@ -406,6 +406,27 @@ process.on('SIGINT', shutdown)
 process.stdin.on('end', shutdown)
 process.stdin.on('close', shutdown)
 
+// --- Periodic name re-check ---
+// The parent Claude Code process might get --name set after we start
+// (e.g. session resumed with a name). Re-check on each heartbeat cycle.
+
+function startNameRecheck(): void {
+  setInterval(() => {
+    // Only re-check if we're still on the fallback name
+    const envName = process.env.PARTY_LINE_NAME ?? process.env.CLAUDE_SESSION_NAME
+    if (envName) return // explicit env var — don't override
+
+    const treeName = resolveNameFromProcessTree()
+    if (treeName && treeName !== sessionName) {
+      const oldName = sessionName
+      sessionName = treeName
+      transport.rename(treeName)
+      void presence.rename(treeName)
+      debug(`auto-renamed: ${oldName} → ${treeName} (detected from process tree)`)
+    }
+  }, 30_000) // same interval as heartbeats
+}
+
 // --- Start ---
 
 async function main(): Promise<void> {
@@ -418,6 +439,9 @@ async function main(): Promise<void> {
   // Start presence (announce + heartbeat)
   await presence.start()
   debug('Presence tracker started')
+
+  // Periodically re-check parent process for name changes
+  startNameRecheck()
 
   // Connect MCP server
   const stdio = new StdioServerTransport()
