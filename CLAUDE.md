@@ -10,7 +10,14 @@ See `SPEC.md` for the full design spec, architecture, goals, current status, and
 
 ## Current Status
 
-Code is written but **untested**. First priority is getting it running: `bun install`, verify UDP multicast works, test the dashboard, then test with Claude Code sessions.
+Project is **functional and tested**. The following all work end-to-end:
+
+- UDP multicast transport (send-twice, join/leave, deduplication)
+- Dashboard — web UI at `localhost:3400` and CLI (`watch`, `send`, `request`, `sessions`)
+- MCP channel server with Claude Code — tools delivered, messages received and sent
+- Wake-on-message — incoming messages interrupt Claude when loaded with `--dangerously-load-development-channels server:party-line`
+- Auto-naming — session name read from parent process tree (`/proc` walk finds `--name` flag on the parent `claude` process)
+- Local marketplace install — plugin installed and available as `plugin:party-line@claude-party-line`
 
 ## Tech Stack
 
@@ -42,6 +49,9 @@ dashboard/
   serve.ts              — Web dashboard (HTTP + WebSocket bridge to browser)
   cli.ts                — CLI tool (watch, send, request, sessions, history)
   index.html            — Dashboard web UI
+
+bin/
+  ccpl                  — Launcher script for party-line Claude Code sessions
 ```
 
 ## Running
@@ -57,8 +67,14 @@ bun dashboard/cli.ts sessions           # list online sessions
 bun dashboard/cli.ts send <to> <msg>    # send a message
 bun dashboard/cli.ts request <to> <msg> # send request, wait for response
 
-# As Claude Code channel (development mode)
-claude --dangerously-load-development-channels server:party-line --name my-session
+# Recommended: launch a party-line Claude Code session via the launcher script
+ccpl [name]
+
+# For the Discord/always-on session — watchdog uses --mcp-config + wake-on-message flag:
+claude --mcp-config /path/to/mcp-config.json --dangerously-load-development-channels server:party-line --name discord
+
+# Note: --channels plugin:party-line@claude-party-line gives tools but NOT wake-on-message.
+# Wake requires the server: format with --dangerously-load-development-channels.
 ```
 
 ## Conventions
@@ -77,3 +93,6 @@ claude --dangerously-load-development-channels server:party-line --name my-sessi
 - Heartbeat-based presence — no registry file, passive discovery via multicast
 - Transport-agnostic protocol — envelope format works over any broadcast medium
 - Dashboard is also the testing platform — web, CLI, and JSON output modes
+- Auto-naming via `/proc` process tree walk — reads `--name` flag from parent `claude` process, so `ccpl myname` just works without extra config
+- Wake-on-message requires `server:` format with `--dangerously-load-development-channels` — `plugin:` format delivers tools only, no channel interrupts
+- Dashboard sees its own messages via `includeSelf` transport flag — useful for testing send/receive without a second session

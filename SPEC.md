@@ -138,7 +138,7 @@ A lightweight web UI that joins the party line as a passive listener.
 
 - **Multicast group**: `239.77.76.10` (mnemonic: 77=M, 76=L — "ML"), port `47100`.
 - **Loopback**: `setMulticastLoopback(true)` so senders receive their own messages (useful for dashboard monitoring; filtered out by dedup for self-delivery).
-- **TTL**: `setMulticastTTL(0)` — localhost only, packets never leave the machine.
+- **TTL**: `setMulticastTTL(1)` — localhost only in practice (TTL=1 won't survive a router hop). Note: TTL=0 would be ideal but Bun's `setMulticastTTL(0)` throws `EINVAL`; TTL=1 is the safe minimum.
 - **Message framing**: one JSON object per datagram. No streaming, no fragmentation.
 - **Send-twice**: transmit each message, wait 50ms, transmit again with same `id`. Receiver keeps a Set of recently seen IDs (pruned every 60s) for deduplication.
 
@@ -189,9 +189,11 @@ claude-party-line/
 The plugin needs to know its own name. Resolution order:
 
 1. **`PARTY_LINE_NAME` env var** — explicit override, highest priority.
-2. **`CLAUDE_SESSION_NAME` env var** — check if Claude Code exposes the `--name` flag here.
-3. **Config file** — `~/.claude/channels/party-line/config.json`.
-4. **Fallback** — `hostname-pid` (unique but not human-friendly).
+2. **`/proc/<ppid>/cmdline`** — reads the parent Claude Code process's command line and extracts the `--name` argument. Re-checked every 30s so late-set names are picked up.
+3. **Fallback** — `<working-directory-basename>-<pid>` (e.g., `my-project-12345`). Unique and location-aware but not human-friendly.
+4. **`party_line_set_name` tool** — Claude can rename the session at any time during a conversation. Name change broadcasts an `announce` message to update peers.
+
+Note: Claude Code does not expose `--name` via env var to MCP subprocesses. The `/proc` approach is Linux-specific; macOS would need an alternative (e.g., `ps` parsing).
 
 ## Development & Testing
 
@@ -202,36 +204,51 @@ The plugin needs to know its own name. Resolution order:
 
 ## Current Status (2026-04-03)
 
-**What exists:**
-- Protocol layer: envelope format, serialization, deduplication, ID generation
-- UDP multicast transport: join/leave, send-twice reliability, message filtering
-- Presence tracker: heartbeat, announce, session timeout detection
-- MCP channel server: full tool set (send, request, respond, list_sessions, history)
-- Dashboard monitor: shared multicast listener reusable by web and CLI
-- Web dashboard: real-time session status + message feed + send capability (dark theme)
-- CLI: watch/send/request/sessions/history commands with --json and color output
+**Fully working:**
+- All code compiles cleanly — TypeScript errors fixed (including @types/bun, tsconfig, TTL issue)
+- UDP multicast transport — cross-process messaging tested and confirmed working
+- Web dashboard — HTTP server, REST API, WebSocket bridge, live session/message feed
+- CLI — all commands working: watch, send, request, sessions, history (with --json and color output)
+- MCP channel server — tools registered, stdio handshake correct, Claude Code integration tested
+- End-to-end multi-session communication — sessions can send/receive messages via the party line
+- Session discovery — announce-triggered heartbeat response for faster peer discovery
+- Auto-naming — reads session name from parent Claude Code process tree via `/proc/<ppid>/cmdline`
+- Fallback naming — uses working directory + PID (e.g. `my-project-12345`)
+- `party_line_set_name` tool — manual rename within a running session
+- Periodic name re-check — re-reads name from process tree every 30s
+- Local marketplace — set up for prompt-free plugin installation
+- Dashboard self-visibility — `includeSelf` flag on transport so dashboard sees its own messages
+- Wake-on-message — sessions wake from idle when receiving party-line messages
 
-**What hasn't been tested yet:**
-- Nothing has been run. `bun install` hasn't been done. TypeScript hasn't been compiled.
-- UDP multicast on this specific machine (need to verify kernel support + Bun compatibility)
-- MCP channel registration with Claude Code (`--dangerously-load-development-channels`)
-- Multi-session communication end-to-end
+**Known constraints:**
+- Must use `--dangerously-load-development-channels server:party-line` for full channel behavior (including wake-on-message notifications). Using `--channels plugin:name@marketplace` only registers tools, not notifications, for non-Anthropic-allowlisted plugins.
+- The `server:` format loads `.mcp.json` from the working directory. Use `--mcp-config <path>` if the session runs from a different directory.
+- `.mcp.json` must use absolute paths (not `${CLAUDE_PLUGIN_ROOT}`) when loaded as `server:` format.
+- Plugin cache doesn't auto-update when source changes — bump version in `plugin.json` to force re-cache.
+- TTL must be 1 (not 0) — Bun's `setMulticastTTL(0)` throws `EINVAL`.
 
-**Immediate next steps (P0 — get it running):**
-1. `bun install` + fix any TypeScript issues
-2. Test UDP multicast works on this machine (run dashboard, verify heartbeats)
-3. Test CLI send/receive between two terminal windows
-4. Test MCP channel with a real Claude Code session
-5. Wire up the `PARTY_LINE_NAME` env var in the watchdog scripts that launch sessions
+**Remaining work / future improvements (P2+):**
+- Permission relay — forward tool approval prompts from headless sessions via party line
+- Structured message types — beyond plain text (status updates, task references, file paths)
+- Multi-address `to` field — array of session names for targeted broadcasts
+- Request/response timeout handling — currently fire-and-forget with no deadline enforcement
+- Unit and integration tests
+- Publishing to a real marketplace to avoid requiring `--dangerously-load-development-channels`
 
 ## Open Questions
 
-1. **Does Claude Code expose `--name` to MCP server subprocesses?** Need to check what env vars are available in the MCP server process. If not, we need to pass `PARTY_LINE_NAME` explicitly in the launch command.
-2. **Bun.udpSocket vs node:dgram**: which API is more stable/complete for multicast in current Bun? Need to test both. The current implementation uses `node:dgram`.
-3. **Max message size**: UDP limit is ~65KB. For inter-session text messages this is plenty, but document the limit and keep messages small.
-4. **Multicast on macOS**: need to verify `addMembership` works the same on macOS for portability.
-5. **Channel plugin loading**: do we need the full plugin marketplace structure, or can we just use `--dangerously-load-development-channels server:party-line` with a local `.mcp.json`?
-6. **Dashboard port conflicts**: should the dashboard use a well-known port (3400) or be configurable? Currently configurable via `--port`.
+1. **Max message size**: UDP limit is ~65KB. For inter-session text messages this is plenty, but document the limit and keep messages small to avoid fragmentation.
+2. **Multicast on macOS**: Linux confirmed working. macOS `addMembership` behavior with `node:dgram` under Bun hasn't been verified — may need testing for portability.
+3. **Notifications for marketplace plugins**: Claude Code currently does not register channel notifications (`<channel>` delivery to Claude's context) for non-Anthropic-allowlisted plugins loaded via `--channels plugin:name@marketplace`. This is the key blocker for removing `--dangerously-load-development-channels`. No known workaround short of getting the plugin allowlisted by Anthropic or waiting for policy change.
+4. **Session resume by name**: `~/.claude/sessions/*.json` files contain name and sessionId. A future enhancement could let sessions find a previously-named session and resume it, rather than starting fresh with auto-naming.
+5. **Permission relay design**: forwarding tool approval prompts across sessions requires careful design — what's the right UX? Block the requesting session while waiting? Timeout and auto-deny? Currently unresolved.
+
+## Resolved Questions
+
+1. **Does Claude Code expose `--name` to MCP server subprocesses?** No — Claude Code does not pass `--name` as an env var to MCP subprocess. Resolved by reading `/proc/<ppid>/cmdline` to find the parent Claude Code process and extract its `--name` argument.
+2. **Bun.udpSocket vs node:dgram**: `node:dgram` works correctly for multicast under Bun. `Bun.udpSocket()` is an alternative but not needed.
+3. **Channel plugin loading**: `--dangerously-load-development-channels server:party-line` is the correct approach for full channel behavior (tools + notifications). Marketplace loading only provides tools.
+4. **Dashboard port**: configurable via `--port` flag, defaults to 3400.
 
 ## Design Decisions Made
 
