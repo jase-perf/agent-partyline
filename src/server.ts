@@ -7,6 +7,7 @@
  */
 
 import { hostname } from 'node:os'
+import { basename } from 'node:path'
 import { readFileSync } from 'fs'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
@@ -65,9 +66,9 @@ function resolveSessionName(): string {
   const treeResolved = resolveNameFromProcessTree()
   if (treeResolved) return treeResolved
 
-  // 3. Fallback
-  const host = process.env.HOSTNAME ?? hostname()
-  return `${host}-${process.pid}`
+  // 3. Fallback: use working directory name + PID for a meaningful default
+  const dir = basename(process.cwd())
+  return `${dir}-${process.pid}`
 }
 
 let sessionName = resolveSessionName()
