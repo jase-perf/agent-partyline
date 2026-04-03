@@ -173,7 +173,9 @@ claude-party-line/
 │   ├── presence.ts            # Heartbeat + announce + session tracking
 │   └── types.ts               # Shared TypeScript types
 ├── dashboard/
-│   ├── serve.ts               # Bun HTTP + WebSocket server
+│   ├── monitor.ts             # Shared multicast listener + presence + history
+│   ├── serve.ts               # Web dashboard (Bun HTTP + WebSocket bridge)
+│   ├── cli.ts                 # CLI: watch, send, request, sessions, history
 │   └── index.html             # Single-page dashboard UI
 ├── CLAUDE.md                  # Project instructions
 ├── SPEC.md                    # This file
@@ -198,18 +200,53 @@ The plugin needs to know its own name. Resolution order:
 - **Two-session test**: open two terminals, each running Claude Code with `--name` and the party-line channel loaded. Send messages between them via the dashboard or MCP tools.
 - **Debug logging**: `PARTY_LINE_DEBUG=1` writes to stderr.
 
+## Current Status (2026-04-03)
+
+**What exists:**
+- Protocol layer: envelope format, serialization, deduplication, ID generation
+- UDP multicast transport: join/leave, send-twice reliability, message filtering
+- Presence tracker: heartbeat, announce, session timeout detection
+- MCP channel server: full tool set (send, request, respond, list_sessions, history)
+- Dashboard monitor: shared multicast listener reusable by web and CLI
+- Web dashboard: real-time session status + message feed + send capability (dark theme)
+- CLI: watch/send/request/sessions/history commands with --json and color output
+
+**What hasn't been tested yet:**
+- Nothing has been run. `bun install` hasn't been done. TypeScript hasn't been compiled.
+- UDP multicast on this specific machine (need to verify kernel support + Bun compatibility)
+- MCP channel registration with Claude Code (`--dangerously-load-development-channels`)
+- Multi-session communication end-to-end
+
+**Immediate next steps (P0 — get it running):**
+1. `bun install` + fix any TypeScript issues
+2. Test UDP multicast works on this machine (run dashboard, verify heartbeats)
+3. Test CLI send/receive between two terminal windows
+4. Test MCP channel with a real Claude Code session
+5. Wire up the `PARTY_LINE_NAME` env var in the watchdog scripts that launch sessions
+
 ## Open Questions
 
-1. **Does Claude Code expose `--name` to MCP server subprocesses?** Need to check what env vars are available in the MCP server process.
-2. **Bun.udpSocket vs node:dgram**: which API is more stable/complete for multicast in current Bun? Need to test both.
-3. **Dashboard hosting**: should the dashboard be a separate process, or could it be embedded in one of the party-line plugin instances?
-4. **Max message size**: UDP limit is ~65KB. Do we need chunking for larger payloads, or just document the limit and keep messages small?
+1. **Does Claude Code expose `--name` to MCP server subprocesses?** Need to check what env vars are available in the MCP server process. If not, we need to pass `PARTY_LINE_NAME` explicitly in the launch command.
+2. **Bun.udpSocket vs node:dgram**: which API is more stable/complete for multicast in current Bun? Need to test both. The current implementation uses `node:dgram`.
+3. **Max message size**: UDP limit is ~65KB. For inter-session text messages this is plenty, but document the limit and keep messages small.
+4. **Multicast on macOS**: need to verify `addMembership` works the same on macOS for portability.
+5. **Channel plugin loading**: do we need the full plugin marketplace structure, or can we just use `--dangerously-load-development-channels server:party-line` with a local `.mcp.json`?
+6. **Dashboard port conflicts**: should the dashboard use a well-known port (3400) or be configurable? Currently configurable via `--port`.
+
+## Design Decisions Made
+
+- **UDP multicast over SQLite** — real-time, decentralized, zero dependencies. No polling.
+- **Send-twice for reliability** — simplest possible redundancy. On localhost, this handles the only realistic failure mode (buffer overflow). No sequence numbers, no ACK/NACK, no sliding windows.
+- **Heartbeat + announce for presence** — no registry file, no database. Sessions discover each other passively through multicast traffic.
+- **Protocol is transport-agnostic** — the envelope format and naming convention work over any broadcast medium. UDP is just the first adapter.
+- **Dashboard as testing platform** — three interfaces (web, CLI, log-tail JSON) so we can both visually monitor and programmatically test.
 
 ## Future Vision
 
 The party line pattern extends naturally beyond local UDP:
 
 - **Discord as a transport**: each session gets a thread in a Discord channel. The bot broadcasts to all threads; each session's plugin filters for its thread. Enables remote inter-session communication with zero infrastructure.
-- **Email as a transport**: custom addresses per session. Async, resilient, works across networks.
+- **Email as a transport**: custom addresses per session (e.g., `session-discord@argonautcreations.com`). Async, resilient, works across networks.
 - **Mixed transports**: a session could listen on both UDP (fast local) and Discord (remote). The protocol is the same; only the wire changes.
 - **Non-Claude listeners**: the dashboard is already a non-Claude participant. Any process that speaks the protocol can join — monitoring tools, CI/CD pipelines, home automation, etc.
+- **Centralized presence for remote transports**: local UDP gets free discovery via multicast. Remote transports (Discord, email) may need a lightweight presence server or convention (e.g., a pinned "registry" message in the Discord channel).
