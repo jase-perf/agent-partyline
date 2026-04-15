@@ -1,8 +1,12 @@
 {
-  "name": "claude-party-line",
+  "name": "agent-partyline",
   "version": "0.1.0",
   "description": "Transport-agnostic inter-session messaging for Claude Code via UDP multicast",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Argonaut-Creations/agent-partyline.git"
+  },
   "type": "module",
   "bin": "./src/server.ts",
   "scripts": {

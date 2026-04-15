@@ -1,9 +1,10 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "claude-party-line",
-  "description": "Local marketplace for the Party Line inter-session messaging plugin",
+  "name": "agent-partyline",
+  "description": "Marketplace for the Party Line inter-session messaging plugin for Claude Code",
   "owner": {
-    "name": "Jase"
+    "name": "Argonaut Creations",
+    "url": "https://github.com/Argonaut-Creations"
   },
   "plugins": [
     {

@@ -17,7 +17,7 @@ Project is **functional and tested**. The following all work end-to-end:
 - MCP channel server with Claude Code — tools delivered, messages received and sent
 - Wake-on-message — incoming messages interrupt Claude when loaded with `--dangerously-load-development-channels server:party-line`
 - Auto-naming — session name read from parent process tree (`/proc` walk finds `--name` flag on the parent `claude` process)
-- Local marketplace install — plugin installed and available as `plugin:party-line@claude-party-line`
+- Marketplace install — plugin published as `plugin:party-line@agent-partyline` (repo: https://github.com/Argonaut-Creations/agent-partyline)
 
 ## Tech Stack
 
@@ -73,7 +73,7 @@ ccpl [name]
 # For the Discord/always-on session — watchdog uses --mcp-config + wake-on-message flag:
 claude --mcp-config /path/to/mcp-config.json --dangerously-load-development-channels server:party-line --name discord
 
-# Note: --channels plugin:party-line@claude-party-line gives tools but NOT wake-on-message.
+# Note: --channels plugin:party-line@agent-partyline gives tools but NOT wake-on-message.
 # Wake requires the server: format with --dangerously-load-development-channels.
 ```
 

@@ -8,10 +8,11 @@
  *   bun dashboard/serve.ts [--port 3400] [--name dashboard]
  */
 
-import { readFileSync } from 'fs'
-import { join, dirname } from 'path'
+import { readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { join, dirname, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { PartyLineMonitor } from './monitor.js'
+import { startQuotaPoller, stopQuotaPoller, getQuota } from './quota.js'
 import type { Envelope } from '../src/types.js'
 import type { ServerWebSocket } from 'bun'
 
@@ -25,6 +26,28 @@ function getArg(flag: string, fallback: string): string {
 
 const PORT = parseInt(getArg('--port', '3400'), 10)
 const NAME = getArg('--name', 'dashboard')
+
+// --- Context overrides config ---
+
+interface ContextOverrides {
+  [sessionName: string]: { contextLimit: number }
+}
+
+const OVERRIDES_DIR = resolve(process.env.HOME ?? '/home/claude', '.config/party-line')
+const OVERRIDES_PATH = join(OVERRIDES_DIR, 'overrides.json')
+
+function loadOverrides(): ContextOverrides {
+  try {
+    return JSON.parse(readFileSync(OVERRIDES_PATH, 'utf-8')) as ContextOverrides
+  } catch {
+    return {}
+  }
+}
+
+function saveOverrides(overrides: ContextOverrides): void {
+  mkdirSync(OVERRIDES_DIR, { recursive: true })
+  writeFileSync(OVERRIDES_PATH, JSON.stringify(overrides, null, 2) + '\n')
+}
 
 // --- Monitor ---
 
@@ -47,6 +70,16 @@ setInterval(() => {
   }
 }, 5000)
 
+// Periodic quota push (every 30s — data only refreshes every 5min from API)
+setInterval(() => {
+  const quota = getQuota()
+  if (!quota) return
+  const json = JSON.stringify({ type: 'quota', data: quota })
+  for (const ws of wsClients) {
+    ws.send(json)
+  }
+}, 30_000)
+
 // --- HTML ---
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -68,6 +101,44 @@ const server = Bun.serve({
     // REST API: list sessions
     if (url.pathname === '/api/sessions') {
       return Response.json(monitor.getSessions())
+    }
+
+    // REST API: get context overrides
+    if (url.pathname === '/api/overrides' && req.method === 'GET') {
+      return Response.json(loadOverrides())
+    }
+
+    // REST API: set context override for a session
+    if (url.pathname === '/api/overrides' && req.method === 'POST') {
+      return (async () => {
+        const body = (await req.json()) as { session?: string; contextLimit?: number }
+        if (!body.session || !body.contextLimit) {
+          return Response.json({ error: '"session" and "contextLimit" required' }, { status: 400 })
+        }
+        const overrides = loadOverrides()
+        overrides[body.session] = { contextLimit: body.contextLimit }
+        saveOverrides(overrides)
+        return Response.json({ ok: true })
+      })()
+    }
+
+    // REST API: delete context override for a session
+    if (url.pathname === '/api/overrides' && req.method === 'DELETE') {
+      return (async () => {
+        const body = (await req.json()) as { session?: string }
+        if (!body.session) {
+          return Response.json({ error: '"session" required' }, { status: 400 })
+        }
+        const overrides = loadOverrides()
+        delete overrides[body.session]
+        saveOverrides(overrides)
+        return Response.json({ ok: true })
+      })()
+    }
+
+    // REST API: quota status
+    if (url.pathname === '/api/quota') {
+      return Response.json(getQuota() ?? { error: 'no data yet' })
     }
 
     // REST API: message history
@@ -102,6 +173,9 @@ const server = Bun.serve({
       wsClients.add(ws)
       // Send current state
       ws.send(JSON.stringify({ type: 'sessions', data: monitor.getSessions() }))
+      const quota = getQuota()
+      if (quota) ws.send(JSON.stringify({ type: 'quota', data: quota }))
+      ws.send(JSON.stringify({ type: 'overrides', data: loadOverrides() }))
       const history = monitor.getHistory({ limit: 100 })
       for (const msg of history) {
         ws.send(JSON.stringify({ type: 'message', data: msg }))
@@ -141,15 +215,18 @@ const server = Bun.serve({
 
 async function main(): Promise<void> {
   await monitor.start()
+  startQuotaPoller(300_000) // poll every 5 minutes
   console.log(`Party Line Dashboard`)
   console.log(`  Web UI:  http://localhost:${PORT}`)
   console.log(`  WS:     ws://localhost:${PORT}/ws`)
   console.log(`  Name:    ${NAME}`)
   console.log(`  Multicast: 239.77.76.10:47100`)
+  console.log(`  Quota:   polling every 5 min`)
   console.log()
 }
 
 function shutdown(): void {
+  stopQuotaPoller()
   monitor.stop()
   server.stop()
   process.exit(0)

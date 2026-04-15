@@ -25,6 +25,21 @@ export interface KnownSession {
 export interface SessionMetadata {
   description?: string
   capabilities?: string[]
+  /** Live session status from JSONL introspection. */
+  status?: {
+    state: 'idle' | 'working' | 'unknown'
+    lastActivity: string
+    lastText: string
+    currentTool: string | null
+    gitBranch: string | null
+    cwd: string | null
+    model: string | null
+    uptimeMs: number
+    turnDurationMs: number | null
+    messageCount: number | null
+    contextTokens: number | null
+    outputTokens: number | null
+  }
 }
 
 /** Configuration for the UDP multicast transport. */

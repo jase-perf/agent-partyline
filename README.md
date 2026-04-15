@@ -42,17 +42,28 @@ Each Claude Code session runs a party-line MCP server that joins a UDP multicast
 - Linux (multicast uses `/proc` for auto-naming; macOS not yet tested)
 - Claude.ai login (API key auth doesn't support channels)
 
-## Quick Start
+## Install
 
-### 1. Clone and install
+The easiest way — register the marketplace from GitHub, then install the plugin:
 
 ```bash
-git clone <repo-url> ~/projects/claude-party-line
+claude plugin marketplace add Argonaut-Creations/agent-partyline
+claude plugin install party-line@agent-partyline
+```
+
+This gives you the MCP tools (`party_line_send`, `party_line_request`, etc.) inside any Claude Code session. For **wake-on-message** behavior (idle sessions respond to incoming messages), you still need the `--dangerously-load-development-channels` flag — see [Wake-on-Message Setup](#important-wake-on-message-setup) below.
+
+If you want the dashboard, launcher script, and ability to hack on the source, also clone the repo:
+
+```bash
+git clone https://github.com/Argonaut-Creations/agent-partyline.git ~/projects/claude-party-line
 cd ~/projects/claude-party-line
 bun install
 ```
 
-### 2. Start the dashboard
+## Quick Start
+
+### 1. Start the dashboard
 
 ```bash
 bun dashboard/serve.ts
@@ -60,7 +71,7 @@ bun dashboard/serve.ts
 
 Open http://localhost:3400 to see the web UI. You should see the dashboard appear as an online session.
 
-### 3. Launch a Claude Code session with party-line
+### 2. Launch a Claude Code session with party-line
 
 The simplest way:
 
@@ -83,11 +94,11 @@ ccpl my-session
 
 The `ccpl` script handles `--mcp-config` and `--dangerously-load-development-channels` for you. If a session with that name already exists, it resumes it.
 
-### 4. Send a message from the dashboard
+### 3. Send a message from the dashboard
 
 In the web UI at localhost:3400, type a session name in the "To" field, write a message, and click Send. The target session will wake up and respond.
 
-### 5. Open a second session
+### 4. Open a second session
 
 In another terminal:
 
@@ -104,7 +115,7 @@ This is the most common gotcha. There are two ways to load the party-line channe
 | Method | Tools | Wake-on-message |
 |--------|-------|-----------------|
 | `--dangerously-load-development-channels server:party-line` | Yes | **Yes** |
-| `--channels plugin:party-line@claude-party-line` | Yes | No |
+| `--channels plugin:party-line@agent-partyline` | Yes | No |
 
 **Wake-on-message** means a party-line message will interrupt an idle Claude session and trigger a response — the same way a Discord message wakes the Discord channel.
 
@@ -114,16 +125,13 @@ The `--dangerously-load-development-channels server:party-line` method bypasses 
 
 **The tradeoff:** `--dangerously-load-development-channels` shows a confirmation prompt on startup. You can auto-accept it in tmux-based setups (see [Always-On Setup](#always-on-setup)).
 
-## Installing as a Plugin (Optional)
+## Installing from a Local Checkout
 
-If you want the plugin marketplace integration (for `--channels` usage, tools without wake):
+If you cloned the repo and want to register that checkout as a marketplace (useful when hacking on the source):
 
 ```bash
-# Register the local marketplace
 claude plugin marketplace add ~/projects/claude-party-line
-
-# Install the plugin
-claude plugin install party-line@claude-party-line
+claude plugin install party-line@agent-partyline
 ```
 
 This is optional. The `--mcp-config` + `--dangerously-load-development-channels` approach works without installing the plugin.

@@ -17,6 +17,7 @@ import {
 import { UdpMulticastTransport } from './transport/udp-multicast.js'
 import { PresenceTracker } from './presence.js'
 import { createEnvelope, generateCallbackId } from './protocol.js'
+import { getSessionStatus } from './introspect.js'
 import type { Envelope, MessageType } from './types.js'
 
 // --- Session name resolution ---
@@ -100,6 +101,12 @@ const presence = new PresenceTracker(transport, sessionName, {
   description: `Claude Code session: ${sessionName}`,
 })
 
+// Enrich heartbeats with live session status from JSONL introspection
+presence.setStatusProvider(() => {
+  const status = getSessionStatus()
+  return status ?? undefined
+})
+
 // --- MCP Server ---
 
 const mcp = new Server(
@@ -136,8 +143,8 @@ function handleInbound(envelope: Envelope): void {
   // Record all traffic for history
   recordMessage(envelope)
 
-  // Only deliver non-heartbeat messages that are addressed to us (or "all")
-  if (envelope.type === 'heartbeat') return
+  // Only deliver user-initiated messages — filter out presence protocol traffic
+  if (envelope.type === 'heartbeat' || envelope.type === 'announce') return
 
   const isForUs =
     envelope.to === sessionName ||
@@ -335,6 +342,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       const lines = sessions.map((s) => {
         const isSelf = s.name === sessionName ? ' (this session)' : ''
+        const status = s.metadata?.status
+        if (status) {
+          const stateIcon = status.state === 'working' ? '🔄' : status.state === 'idle' ? '💤' : '❓'
+          const branch = status.gitBranch ? ` [${status.gitBranch}]` : ''
+          const tool = status.currentTool ? ` running ${status.currentTool}` : ''
+          const modelShort = status.model ? ` (${status.model.replace('claude-', '')})` : ''
+          const ctx = status.contextTokens !== null
+            ? ` ctx:${Math.round((status.contextTokens ?? 0) / 1000)}k`
+            : ''
+          const msgs = status.messageCount ? ` msgs:${status.messageCount}` : ''
+          const lastText = status.lastText ? `\n    "${status.lastText.slice(0, 80)}"` : ''
+          return `- ${stateIcon} ${s.name}${isSelf}${modelShort}${branch}${tool}${ctx}${msgs}${lastText}`
+        }
         const desc = s.metadata?.description ? ` — ${s.metadata.description}` : ''
         return `- ${s.name}${isSelf}${desc} (last seen: ${new Date(s.lastSeen).toISOString()})`
       })

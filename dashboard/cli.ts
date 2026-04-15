@@ -85,8 +85,24 @@ async function main(): Promise<void> {
           console.log('Online sessions:')
           for (const s of sessions) {
             const self = s.name === NAME ? ' (this)' : ''
-            const desc = s.metadata?.description ? ` — ${s.metadata.description}` : ''
-            console.log(`  ${s.name}${self}${desc}`)
+            const st = s.metadata?.status
+            if (st) {
+              const stateIcon = st.state === 'working' ? '🔄' : st.state === 'idle' ? '💤' : '❓'
+              const branch = st.gitBranch ? `[${st.gitBranch}]` : ''
+              const tool = st.currentTool ? `running ${st.currentTool}` : st.state
+              const ctx = st.contextPercent !== null
+                ? `ctx: ${st.contextPercent}% (${Math.round((st.contextTokens ?? 0) / 1000)}k/${Math.round((st.contextLimit ?? 0) / 1000)}k)`
+                : ''
+              const msgs = st.messageCount ? `${st.messageCount} msgs` : ''
+              console.log(`  ${stateIcon} ${s.name}${self} ${branch}`)
+              console.log(`     ${tool} · ${ctx} · ${msgs}`)
+              if (st.lastText) {
+                console.log(`     "${st.lastText.slice(0, 80)}"`)
+              }
+            } else {
+              const desc = s.metadata?.description ? ` — ${s.metadata.description}` : ''
+              console.log(`  ${s.name}${self}${desc}`)
+            }
           }
         }
       }

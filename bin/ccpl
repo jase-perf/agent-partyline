@@ -3,13 +3,30 @@
 # ccpl — Launch Claude Code with the party-line channel
 #
 # Usage:
-#   ccpl              Start a new session
-#   ccpl research     Resume "research" session, or start a new one with that name
+#   ccpl              Continue most recent session (or start new)
+#   ccpl research     Resume session named "research" (opens picker), or start new with that name
+#   ccpl --new NAME   Force a new session with the given name (skip resume)
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-name="${1:-}"
+
+force_new=false
+name=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --new)
+            force_new=true
+            name="${2:-}"
+            shift 2
+            ;;
+        *)
+            name="$1"
+            shift
+            ;;
+    esac
+done
 
 base_args=(
     --dangerously-skip-permissions
@@ -18,25 +35,15 @@ base_args=(
 )
 
 if [ -z "$name" ]; then
-    exec claude "${base_args[@]}"
+    # No name: continue most recent session in this directory
+    exec claude "${base_args[@]}" --continue
 fi
 
-# Look for an existing session with this name
-session_id=""
-for f in ~/.claude/sessions/*.json; do
-    [ -f "$f" ] || continue
-    s_name=$(python3 -c "import json; print(json.load(open('$f')).get('name',''))" 2>/dev/null)
-    s_id=$(python3 -c "import json; print(json.load(open('$f')).get('sessionId',''))" 2>/dev/null)
-    if [ "$s_name" = "$name" ] && [ -n "$s_id" ]; then
-        session_id="$s_id"
-        break
-    fi
-done
-
-if [ -n "$session_id" ]; then
-    echo "Resuming session '$name' ($session_id)"
-    exec claude "${base_args[@]}" --name "$name" --resume "$session_id"
-else
+if [ "$force_new" = true ]; then
     echo "Starting new session '$name'"
     exec claude "${base_args[@]}" --name "$name"
 fi
+
+# Try to resume a session matching this name; falls back to picker
+echo "Looking for session '$name'..."
+exec claude "${base_args[@]}" --name "$name" --resume "$name"

@@ -16,6 +16,7 @@ export class PresenceTracker {
   private sessionName: string
   private metadata: SessionMetadata
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private statusProvider: (() => SessionMetadata['status']) | null = null
 
   constructor(
     transport: UdpMulticastTransport,
@@ -25,6 +26,11 @@ export class PresenceTracker {
     this.transport = transport
     this.sessionName = sessionName
     this.metadata = metadata
+  }
+
+  /** Register a callback that provides live status for heartbeats. */
+  setStatusProvider(provider: () => SessionMetadata['status']): void {
+    this.statusProvider = provider
   }
 
   /** Start sending heartbeats and announce our presence. */
@@ -99,11 +105,15 @@ export class PresenceTracker {
   }
 
   private async sendHeartbeat(): Promise<void> {
+    const meta: SessionMetadata = { ...this.metadata }
+    if (this.statusProvider) {
+      meta.status = this.statusProvider() ?? undefined
+    }
     const envelope = createEnvelope(
       this.sessionName,
       'all',
       'heartbeat',
-      JSON.stringify(this.metadata),
+      JSON.stringify(meta),
     )
     await this.transport.send(envelope).catch(() => {})
   }

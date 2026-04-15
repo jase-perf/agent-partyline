@@ -4,3 +4,4 @@ bun.lock
 *.db
 *.db-wal
 *.db-shm
+.playwright-mcp/
