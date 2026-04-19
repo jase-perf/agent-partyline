@@ -1,5 +1,4 @@
 const busFeed = document.getElementById('busFeed');
-const sessionList = document.getElementById('sessionList');
 const connStatus = document.getElementById('connStatus');
 const showHeartbeats = document.getElementById('showHeartbeats');
 const showAnnounce = document.getElementById('showAnnounce');
@@ -309,131 +308,6 @@ function updateSessions(sessions) {
     seedUnreadCounts();  // fires once, async
   }
   updateOverviewGrid(sessions);
-  if (sessions.length === 0) {
-    sessionList.textContent = 'no sessions';
-    return;
-  }
-  // Build DOM safely without innerHTML
-  sessionList.textContent = '';
-  sessions.forEach(function(s) {
-    var item = document.createElement('div');
-    item.className = 'session-item';
-    item.addEventListener('click', function() {
-      showSessionModal(s);
-    });
-
-    var st = (s.metadata && s.metadata.status) ? s.metadata.status : null;
-    var stModel = st ? (st.model || '') : '';
-
-    item.addEventListener('contextmenu', function(e) {
-      showContextMenu(e, s.name, stModel);
-    });
-
-    // Header row: dot + name + branch
-    var dot = document.createElement('span');
-    dot.className = 'status-dot online';
-    item.appendChild(dot);
-
-    var nameEl = document.createElement('span');
-    nameEl.className = 'name';
-    nameEl.textContent = s.name;
-    item.appendChild(nameEl);
-
-    if (st && st.gitBranch) {
-      var branchEl = document.createElement('span');
-      branchEl.className = 'meta';
-      branchEl.textContent = ' [' + st.gitBranch + ']';
-      item.appendChild(branchEl);
-    }
-
-    // Model label
-    if (st && stModel) {
-      var effectiveLimit = getEffectiveContextLimit(s.name, st);
-      var modelEl = document.createElement('div');
-      modelEl.className = 'status-line';
-      // Clean up for display: "claude-opus-4-6" -> "opus 4.6"
-      var display = stModel
-        .replace('claude-', '')
-        .replace(/-(\d+)-(\d+)/, ' $1.$2');
-      // Add context variant for Opus
-      if (stModel.indexOf('opus') !== -1) {
-        display += effectiveLimit === 1000000 ? ' [1M]' : ' [200k]';
-      }
-      modelEl.textContent = display;
-      modelEl.style.color = stModel.indexOf('opus') !== -1 ? 'var(--purple)' : stModel.indexOf('sonnet') !== -1 ? 'var(--accent)' : 'var(--cyan)';
-      item.appendChild(modelEl);
-    }
-
-    // Status row: state+tool on left, uptime+msgs on right
-    if (st) {
-      var statusRow = document.createElement('div');
-      statusRow.className = 'status-row';
-
-      var stateEl = document.createElement('span');
-      stateEl.className = 'state state-' + st.state;
-      var stateText = st.state;
-      if (st.state === 'working' && st.currentTool) {
-        stateText += ' (' + st.currentTool + ')';
-      }
-      stateEl.textContent = stateText;
-      statusRow.appendChild(stateEl);
-
-      var rightEl = document.createElement('span');
-      rightEl.className = 'status-right';
-      var rightParts = [];
-      if (st.uptimeMs) rightParts.push('up ' + formatUptime(st.uptimeMs));
-      if (st.messageCount) rightParts.push(st.messageCount + ' msgs');
-      rightEl.textContent = rightParts.join(' \u00b7 ');
-      statusRow.appendChild(rightEl);
-
-      item.appendChild(statusRow);
-
-      // Context bar — use effective limit from overrides
-      if (st.contextTokens !== null && st.contextTokens !== undefined) {
-        var effLimit = getEffectiveContextLimit(s.name, st);
-        var effPercent = Math.round((st.contextTokens / effLimit) * 100);
-
-        var barBg = document.createElement('div');
-        barBg.className = 'ctx-bar-bg';
-        var barFg = document.createElement('div');
-        barFg.className = 'ctx-bar-fg';
-        if (effPercent > 90) barFg.className += ' crit';
-        else if (effPercent > 70) barFg.className += ' warn';
-        barFg.style.width = Math.min(effPercent, 100) + '%';
-        barBg.appendChild(barFg);
-
-        // Add 200k marker for 1M context sessions
-        if (effLimit > 200000) {
-          var mark = document.createElement('div');
-          mark.className = 'ctx-bar-mark';
-          mark.style.left = Math.round((200000 / effLimit) * 100) + '%';
-          barBg.appendChild(mark);
-        }
-
-        item.appendChild(barBg);
-
-        var ctxLabel = document.createElement('div');
-        ctxLabel.className = 'status-line';
-        ctxLabel.textContent = 'ctx: ' + formatTokens(st.contextTokens) + '/' + formatTokens(effLimit) + ' (' + effPercent + '%)';
-        item.appendChild(ctxLabel);
-      }
-
-      // Last text snippet
-      if (st.lastText) {
-        var lastTextEl = document.createElement('div');
-        lastTextEl.className = 'last-text';
-        lastTextEl.textContent = '\u201c' + st.lastText.slice(0, 80) + '\u201d';
-        item.appendChild(lastTextEl);
-      }
-    } else if (s.metadata && s.metadata.description) {
-      var meta = document.createElement('div');
-      meta.className = 'meta';
-      meta.textContent = s.metadata.description;
-      item.appendChild(meta);
-    }
-
-    sessionList.appendChild(item);
-  });
 }
 
 function addMessage(msg) {
@@ -733,20 +607,7 @@ function buildSessionCard(s) {
   var sparkId = (s.metadata && s.metadata.status && s.metadata.status.sessionId) ? s.metadata.status.sessionId : s.name;
   fetchAndRenderSparkline(sparkId, parts.sparklineSlot);
 
-  card.addEventListener('click', function() {
-    selectedSessionId = s.name;
-    // Select visual state
-    document.querySelectorAll('.session-card').forEach(function(c) { c.classList.remove('selected'); });
-    card.classList.add('selected');
-    // Enable and switch to session-detail tab
-    var detailBtn = document.querySelector('.tabs button[data-view="session-detail"]');
-    if (detailBtn) {
-      detailBtn.disabled = false;
-      document.querySelectorAll('.tabs button').forEach(function(b) { b.classList.remove('active'); });
-      detailBtn.classList.add('active');
-    }
-    renderView('session-detail');
-  });
+  card.addEventListener('click', () => openSessionDetail(s.name));
 
   return card;
 }
@@ -962,6 +823,17 @@ function prependTimelineEvent(event) {
   var emptyMsg = timeline.querySelector('.empty-msg');
   if (emptyMsg) emptyMsg.remove();
   timeline.insertBefore(buildTimelineItem(event), timeline.firstChild);
+}
+
+function openSessionDetail(sessionName) {
+  selectedSessionId = sessionName;
+  const tab = document.querySelector('button[data-view="session-detail"]');
+  if (tab) {
+    tab.disabled = false;
+    document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+    tab.classList.add('active');
+    renderView('session-detail');
+  }
 }
 
 async function loadSessionDetailView() {
