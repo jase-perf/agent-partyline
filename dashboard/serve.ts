@@ -21,6 +21,7 @@ import { handleIngest } from '../src/ingest/http.js'
 import { loadOrCreateToken } from '../src/ingest/auth.js'
 import { getMachineId } from '../src/machine-id.js'
 import { JsonlObserver } from '../src/observers/jsonl.js'
+import { GeminiTranscriptObserver } from '../src/observers/gemini-transcript.js'
 import { recentEvents } from '../src/storage/queries.js'
 import { pruneOldEvents } from '../src/storage/retention.js'
 import { rollupDailyMetrics, hourlyToolCalls } from '../src/storage/metrics.js'
@@ -86,6 +87,14 @@ const jsonlObserver = new JsonlObserver(
 )
 jsonlObserver.on((u) => {
   const json = JSON.stringify({ type: 'jsonl', data: u })
+  for (const ws of wsClients) ws.send(json)
+})
+
+const geminiObserver = new GeminiTranscriptObserver(
+  join(process.env.HOME ?? '/home/claude', '.gemini', 'tmp'),
+)
+geminiObserver.on((u) => {
+  const json = JSON.stringify({ type: 'gemini-transcript', data: u })
   for (const ws of wsClients) ws.send(json)
 })
 
@@ -302,6 +311,7 @@ const server = Bun.serve({
 async function main(): Promise<void> {
   await monitor.start()
   await jsonlObserver.start()
+  await geminiObserver.start()
   startQuotaPoller(300_000) // poll every 5 minutes
 
   // Retention + daily metrics rollup
@@ -328,6 +338,7 @@ async function main(): Promise<void> {
 
 function shutdown(): void {
   jsonlObserver.stop()
+  geminiObserver.stop()
   db.close()
   stopQuotaPoller()
   monitor.stop()
