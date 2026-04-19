@@ -32,7 +32,7 @@
 - `src/storage/queries.ts` — prepared statements and query fns
 - `src/ingest/http.ts` — `/ingest` handler, auth check, envelope validation
 - `src/ingest/auth.ts` — shared-secret token management
-- `src/observers/jsonl.ts` — `~/.claude/projects/**/*.jsonl` watcher, tail parser, session-id extractor
+- `src/observers/jsonl.ts` — `~/.claude/projects/**/*.jsonl` **polling** tailer (fs.watch recursive is broken on Bun/Linux — see verification doc §4), session-id extractor, also tails `<session-id>/subagents/agent-<id>.jsonl` for subagent activity
 - `src/aggregator.ts` — fold events + JSONL into per-session state objects
 - `src/machine-id.ts` — read/write stable machine ID at `~/.config/party-line/machine-id`
 - `hooks/emit.sh` — bash emitter: reads stdin JSON, augments with session/machine/hook-event name, POSTs to ingest
@@ -68,6 +68,13 @@ Before writing code, verify a few assumptions with a short spike. These MAY inva
 - **Subagent identification** — verify parent-session `PreToolUse`/`PostToolUse` include `agent_id` and `agent_type` when a subagent is running. If not, subagent tree visibility falls back to `SubagentStart`/`Stop` only.
 - **JSONL file naming** — confirm current location is `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` on this machine.
 - **Bun `fs.watch` recursion** — confirm recursive watch works on Linux for `~/.claude/projects/`. If not, use `inotifywait` as a child process.
+
+**RESOLVED (see `docs/superpowers/plans/2026-04-19-verification.md`):**
+- Hook set complete — every planned event exists.
+- Bun `fs.watch` recursive is **broken** on Linux (Node works; Bun doesn't). Polling confirmed working — use polling in Task 9.
+- JSONL convention confirmed: `~/.claude/projects/<cwd-slug>/<session-id>.jsonl` (append-only). Subagent transcripts live separately at `<cwd-slug>/<session-id>/subagents/agent-<id>.jsonl`; sibling `agent-<id>.meta.json` has `agentType`/`description`.
+- `success` is **not** top-level on `PostToolUse`. Inspect `tool_response` per tool (Write has `tool_response.success`; other tools vary).
+- Parent-session vs subagent hook scope is **unverified** — design Task 10 to rely on `SubagentStart`/`SubagentStop` events + tailing `<session>/subagents/agent-<id>.jsonl` via observer. Treat parent-session PreToolUse/PostToolUse with `agent_id` as bonus if/when it works.
 
 Record findings in a short note at `docs/superpowers/plans/2026-04-19-verification.md`.
 
@@ -996,11 +1003,15 @@ git commit -m "feat(hooks): install/uninstall scripts with idempotent merge"
 
 ## Phase 3 — Observers
 
-### Task 9: JSONL transcript observer
+### Task 9: JSONL transcript observer (polling)
 
 **Files:**
 - Create: `src/observers/jsonl.ts`
 - Test: `tests/jsonl-observer.test.ts`
+
+**Note:** The original design used `fs.watch({ recursive: true })`. Verification in §4 of `2026-04-19-verification.md` found this is **broken** on Bun 1.3.11 + Linux — nested-file events are silently dropped. Polling is the replacement: `setInterval` walks the target root every 500ms, `statSync` each known `.jsonl` file, re-reads any that grew. New files are discovered by periodic `readdir` of the root + `<session-id>/subagents/` subdirs.
+
+The class also observes subagent transcripts at `~/.claude/projects/<cwd-slug>/<session-id>/subagents/agent-<agent_id>.jsonl` so the dashboard can show subagent tool activity even if parent-session hooks don't fire for subagent tool calls.
 
 - [ ] **Step 1: Failing test**
 
@@ -1040,9 +1051,8 @@ describe('JsonlObserver', () => {
 
 ```typescript
 // src/observers/jsonl.ts
-import { readFileSync, statSync, watch, readdirSync, existsSync } from 'fs'
+import { readFileSync, statSync, readdirSync, existsSync } from 'fs'
 import { basename, join } from 'path'
-import type { FSWatcher } from 'fs'
 
 export interface JsonlUpdate {
   session_id: string
@@ -1053,48 +1063,62 @@ export interface JsonlUpdate {
 type Listener = (u: JsonlUpdate) => void
 
 export class JsonlObserver {
-  private watchers: FSWatcher[] = []
   private offsets = new Map<string, number>()
   private listeners: Listener[] = []
   private running = false
+  private timer: ReturnType<typeof setInterval> | null = null
+  private readonly pollIntervalMs: number
 
-  constructor(private root: string) {}
+  constructor(private root: string, pollIntervalMs = 500) {
+    this.pollIntervalMs = pollIntervalMs
+  }
 
   on(l: Listener): void { this.listeners.push(l) }
 
   async start(): Promise<void> {
     this.running = true
-    try {
-      const w = watch(this.root, { recursive: true }, (_evt, filename) => {
-        if (!filename || !filename.toString().endsWith('.jsonl')) return
-        const full = join(this.root, filename.toString())
-        if (!existsSync(full)) return
-        this.poll(full)
-      })
-      this.watchers.push(w)
-    } catch {
-      // root doesn't exist yet — that's fine
-    }
+    this.scan()
+    this.timer = setInterval(() => this.scan(), this.pollIntervalMs)
+  }
 
+  private scan(): void {
+    if (!this.running) return
+    if (!existsSync(this.root)) return
+    // Main-session transcripts: <root>/<cwd-slug>/<session-id>.jsonl
     try {
-      for (const entry of readdirSync(this.root, { recursive: true, withFileTypes: true })) {
-        if (entry.isFile() && entry.name.endsWith('.jsonl')) {
-          const full = join((entry as unknown as { parentPath?: string }).parentPath ?? this.root, entry.name)
-          this.poll(full)
+      for (const cwdDir of readdirSync(this.root, { withFileTypes: true })) {
+        if (!cwdDir.isDirectory()) continue
+        const cwdPath = join(this.root, cwdDir.name)
+        for (const entry of readdirSync(cwdPath, { withFileTypes: true })) {
+          if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+            this.poll(join(cwdPath, entry.name))
+          } else if (entry.isDirectory()) {
+            // Subagent transcripts: <session-id>/subagents/agent-<agent_id>.jsonl
+            const subagentsDir = join(cwdPath, entry.name, 'subagents')
+            if (existsSync(subagentsDir)) {
+              for (const sub of readdirSync(subagentsDir, { withFileTypes: true })) {
+                if (sub.isFile() && sub.name.endsWith('.jsonl')) {
+                  this.poll(join(subagentsDir, sub.name))
+                }
+              }
+            }
+          }
         }
       }
-    } catch { /* no-op */ }
+    } catch { /* root read failed — next tick will retry */ }
   }
 
   private poll(path: string): void {
     if (!this.running) return
     let size: number
     try { size = statSync(path).size } catch { return }
-    const prev = this.offsets.get(path) ?? size
-    if (size <= prev) {
+    const prev = this.offsets.get(path)
+    if (prev === undefined) {
+      // First sighting — seed offset to current size; don't replay existing content.
       this.offsets.set(path, size)
       return
     }
+    if (size <= prev) return
     let tail: string
     try {
       const buf = readFileSync(path)
@@ -1114,8 +1138,7 @@ export class JsonlObserver {
 
   stop(): void {
     this.running = false
-    for (const w of this.watchers) w.close()
-    this.watchers = []
+    if (this.timer) { clearInterval(this.timer); this.timer = null }
   }
 }
 ```
@@ -1258,7 +1281,16 @@ export class Aggregator {
     }
 
     if (ev.hook_event === 'PostToolUse') {
-      const p = ev.payload as { tool_name?: string; success?: boolean }
+      const p = ev.payload as {
+        tool_name?: string
+        tool_response?: { success?: boolean; isError?: boolean; error?: unknown }
+      }
+      // `success` is not top-level on PostToolUse. Inspect tool_response per tool.
+      // Heuristic: tool_response.success === false, or tool_response.isError === true,
+      // or tool_response.error present → failure. Otherwise assume success.
+      const tr = p.tool_response
+      const success =
+        tr && (tr.success === false || tr.isError === true || tr.error != null) ? 0 : 1
       this.db.query(
         `INSERT INTO tool_calls (session_id, agent_id, tool_name, started_at, ended_at, success)
          VALUES ($s, $a, $t, $ts, $ts, $ok)`,
@@ -1267,7 +1299,7 @@ export class Aggregator {
         $a: ev.agent_id ?? null,
         $t: p.tool_name ?? 'unknown',
         $ts: ev.ts,
-        $ok: p.success === false ? 0 : 1,
+        $ok: success,
       })
     }
 
