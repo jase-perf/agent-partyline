@@ -1421,4 +1421,24 @@ document.getElementById('detail-back').addEventListener('click', function() {
   if (tab) tab.click();
 });
 
+document.getElementById('detail-stream').addEventListener('click', (e) => {
+  const btn = e.target.closest('.copy-btn');
+  if (btn) {
+    const src = btn.dataset.src;
+    if (src) navigator.clipboard.writeText(src).then(() => {
+      btn.textContent = 'copied';
+      setTimeout(() => { btn.textContent = 'copy raw'; }, 1200);
+    });
+    return;
+  }
+  const codeBtn = e.target.closest('.code-copy-btn');
+  if (codeBtn) {
+    const pre = codeBtn.parentElement.querySelector('pre');
+    if (pre) navigator.clipboard.writeText(pre.textContent || '').then(() => {
+      codeBtn.textContent = 'copied';
+      setTimeout(() => { codeBtn.textContent = 'copy'; }, 1200);
+    });
+  }
+});
+
 connect();
