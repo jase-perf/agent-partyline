@@ -1043,11 +1043,213 @@ function renderAgentTree() {
 
 async function renderStream() {
   const root = document.getElementById('detail-stream');
-  root.textContent = '';
-  const p = document.createElement('p');
-  p.style.color = 'var(--text-dim)';
-  p.textContent = 'Stream renderer arrives in SB-11.';
-  root.appendChild(p);
+  root.replaceChildren();
+  const loading = document.createElement('p');
+  loading.style.color = 'var(--text-dim)';
+  loading.textContent = 'Loading...';
+  root.appendChild(loading);
+
+  if (!selectedSessionId) return;
+  const qs = 'session_id=' + encodeURIComponent(selectedSessionId)
+    + (selectedAgentId ? '&agent_id=' + encodeURIComponent(selectedAgentId) : '')
+    + '&limit=300';
+  let entries;
+  try {
+    const r = await fetch('/api/transcript?' + qs);
+    entries = await r.json();
+  } catch (e) {
+    root.replaceChildren();
+    const err = document.createElement('p');
+    err.style.color = 'var(--red)';
+    err.textContent = 'Failed to load transcript.';
+    root.appendChild(err);
+    return;
+  }
+  if (!Array.isArray(entries) || entries.length === 0) {
+    root.replaceChildren();
+    const empty = document.createElement('p');
+    empty.style.color = 'var(--text-dim)';
+    empty.textContent = 'No entries yet.';
+    root.appendChild(empty);
+    return;
+  }
+  root.replaceChildren();
+  for (const e of entries) root.appendChild(renderEntry(e));
+  root.scrollTop = root.scrollHeight;
+}
+
+function renderEntry(e) {
+  const wrap = document.createElement('div');
+  wrap.className = 'entry entry-' + e.type;
+  wrap.dataset.uuid = e.uuid || '';
+
+  if (e.type === 'user') {
+    appendLabel(wrap, 'you:');
+    appendMarkdownBody(wrap, e.text || '');
+  } else if (e.type === 'assistant-text') {
+    appendLabel(wrap, 'assistant:');
+    appendMarkdownBody(wrap, e.text || '');
+    const btn = document.createElement('button');
+    btn.className = 'copy-btn';
+    btn.dataset.src = e.text || '';
+    btn.textContent = 'copy raw';
+    wrap.appendChild(btn);
+  } else if (e.type === 'tool-use') {
+    appendToolUse(wrap, e);
+  } else if (e.type === 'subagent-spawn') {
+    appendSpawnMarker(wrap, e);
+  } else if (e.type === 'party-line-send' || e.type === 'party-line-receive') {
+    appendPartyLineEntry(wrap, e);
+  }
+
+  return wrap;
+}
+
+function appendLabel(wrap, text) {
+  const lab = document.createElement('div');
+  lab.className = 'entry-label';
+  lab.textContent = text;
+  wrap.appendChild(lab);
+}
+
+function appendMarkdownBody(wrap, src) {
+  const body = document.createElement('div');
+  body.className = 'entry-body';
+  renderMarkdownInto(body, src);
+  wrap.appendChild(body);
+}
+
+function renderMarkdownInto(container, src) {
+  container.replaceChildren();
+  if (!src) return;
+  let html;
+  try {
+    html = marked.parse(src, { breaks: true, gfm: true });
+    html = DOMPurify.sanitize(html);
+  } catch {
+    const pre = document.createElement('pre');
+    pre.textContent = src;
+    container.appendChild(pre);
+    return;
+  }
+  // Insert sanitized markup via insertAdjacentHTML (avoids innerHTML = assignment).
+  container.insertAdjacentHTML('beforeend', html);
+  // Post-process: wrap each <pre> in a .code-block with a copy button.
+  container.querySelectorAll('pre').forEach((pre) => {
+    if (pre.parentElement && pre.parentElement.classList.contains('code-block')) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'code-block';
+    const btn = document.createElement('button');
+    btn.className = 'code-copy-btn';
+    btn.textContent = 'copy';
+    pre.parentNode.insertBefore(wrap, pre);
+    wrap.appendChild(btn);
+    wrap.appendChild(pre);
+  });
+}
+
+function appendToolUse(wrap, e) {
+  const details = document.createElement('details');
+  details.className = 'tool-use';
+  const summary = document.createElement('summary');
+  // Structural parts via textContent; the small arrow + <code> tag needs inline HTML.
+  // Use element construction to keep it safe.
+  const arrow = document.createTextNode('▸ ');
+  const name = document.createElement('code');
+  name.textContent = e.tool_name || '';
+  const colon = document.createTextNode(': ' + summarizeToolInput(e.tool_name, e.tool_input));
+  summary.appendChild(arrow);
+  summary.appendChild(name);
+  summary.appendChild(colon);
+  details.appendChild(summary);
+
+  const inputDiv = document.createElement('div');
+  inputDiv.className = 'tool-input';
+  const inputLabel = document.createElement('strong');
+  inputLabel.textContent = 'input:';
+  inputDiv.appendChild(inputLabel);
+  const inputPre = document.createElement('pre');
+  inputPre.textContent = JSON.stringify(e.tool_input, null, 2);
+  inputDiv.appendChild(inputPre);
+  details.appendChild(inputDiv);
+
+  const respDiv = document.createElement('div');
+  respDiv.className = 'tool-response';
+  const respLabel = document.createElement('strong');
+  respLabel.textContent = 'response:';
+  respDiv.appendChild(respLabel);
+  if (e.tool_response !== undefined) {
+    const respPre = document.createElement('pre');
+    respPre.textContent = JSON.stringify(e.tool_response, null, 2);
+    respDiv.appendChild(respPre);
+  } else {
+    const em = document.createElement('em');
+    em.textContent = '(no response yet)';
+    respDiv.appendChild(em);
+  }
+  details.appendChild(respDiv);
+
+  wrap.appendChild(details);
+}
+
+function summarizeToolInput(name, input) {
+  if (!input) return '';
+  try {
+    if (name === 'Bash' && input.command) return String(input.command).slice(0, 80);
+    if (name === 'Read' && input.file_path) return String(input.file_path);
+    if (name === 'Write' && input.file_path) return String(input.file_path);
+    if (name === 'Edit' && input.file_path) return String(input.file_path);
+    if (name === 'Grep' && input.pattern) return String(input.pattern).slice(0, 60);
+    if (name === 'Glob' && input.pattern) return String(input.pattern);
+    return JSON.stringify(input).slice(0, 80);
+  } catch {
+    return '';
+  }
+}
+
+function appendSpawnMarker(wrap, e) {
+  const block = document.createElement('div');
+  block.className = 'spawn-marker';
+  if (e.agent_id) block.dataset.agentId = e.agent_id;
+  const title = document.createElement('strong');
+  title.textContent = '→ spawned ' + (e.agent_type || 'subagent');
+  block.appendChild(title);
+  if (e.description) {
+    const desc = document.createElement('div');
+    desc.className = 'spawn-desc';
+    desc.textContent = '"' + e.description + '"';
+    block.appendChild(desc);
+  }
+  if (e.agent_id) {
+    const hint = document.createElement('div');
+    hint.className = 'spawn-click';
+    hint.textContent = 'Click to view this agent';
+    block.appendChild(hint);
+  }
+  wrap.appendChild(block);
+}
+
+function appendPartyLineEntry(wrap, e) {
+  const block = document.createElement('div');
+  const ty = e.envelope_type || 'message';
+  block.className = 'pl-entry pl-' + ty;
+  block.dataset.otherSession = e.other_session || '';
+  const header = document.createElement('strong');
+  const arrow = e.type === 'party-line-send' ? '→ sent' : '← received';
+  const dir = e.type === 'party-line-send' ? 'to' : 'from';
+  header.textContent = arrow + ' ' + ty + ' ' + dir + ' ' + (e.other_session || '');
+  block.appendChild(header);
+  if (e.callback_id) {
+    const cb = document.createTextNode(' [cb:' + e.callback_id.slice(0, 8) + ']');
+    block.appendChild(cb);
+  }
+  if (e.body) {
+    const body = document.createElement('div');
+    body.className = 'pl-body';
+    renderMarkdownInto(body, e.body);
+    block.appendChild(body);
+  }
+  wrap.appendChild(block);
 }
 
 function doDetailSend() {

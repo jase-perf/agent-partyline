@@ -700,3 +700,28 @@
   outline: none;
   border-color: var(--accent);
 }
+
+.entry { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px dashed #21262d; }
+.entry-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+.entry-body { color: var(--text); }
+.entry-body pre { background: #0d1117; border: 1px solid var(--border); padding: 8px; overflow-x: auto; font-size: 12px; border-radius: 4px; }
+.entry-body code { background: #21262d; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+.entry-body h1, .entry-body h2, .entry-body h3 { margin: 8px 0 4px; color: var(--text); }
+.entry-body p { margin: 4px 0; }
+.entry-body ul, .entry-body ol { margin: 4px 0 4px 20px; }
+.copy-btn { margin-top: 4px; background: transparent; color: var(--text-dim); border: 1px solid var(--border); border-radius: 3px; font-size: 10px; padding: 2px 8px; cursor: pointer; }
+.copy-btn:hover { color: var(--text); border-color: var(--text-dim); }
+.code-block { position: relative; margin: 6px 0; }
+.code-copy-btn { position: absolute; top: 4px; right: 4px; background: #21262d; color: var(--text-dim); border: 1px solid var(--border); border-radius: 3px; font-size: 10px; padding: 2px 8px; cursor: pointer; opacity: 0.7; }
+.code-block:hover .code-copy-btn { opacity: 1; }
+.tool-use { margin: 6px 0; background: #0d1117; border-left: 3px solid var(--cyan); padding: 4px 8px; font-size: 12px; }
+.tool-use summary { cursor: pointer; color: var(--text-dim); }
+.tool-input, .tool-response { margin-top: 6px; font-size: 11px; }
+.spawn-marker { border: 1px solid var(--purple); background: rgba(188, 140, 255, 0.08); border-radius: 4px; padding: 8px 10px; margin: 6px 0; cursor: pointer; }
+.spawn-marker:hover { background: rgba(188, 140, 255, 0.15); }
+.spawn-desc { color: var(--text-dim); font-size: 11px; margin-top: 3px; }
+.spawn-click { color: var(--accent); font-size: 10px; margin-top: 4px; }
+.pl-entry { border-left: 3px solid var(--accent); padding: 6px 10px; margin: 6px 0; background: #0d1117; font-size: 12px; cursor: pointer; }
+.pl-entry.pl-request  { border-left-color: var(--yellow); }
+.pl-entry.pl-response { border-left-color: var(--green); }
+.pl-body { margin-top: 4px; color: var(--text-dim); font-size: 11px; }
