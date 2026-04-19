@@ -1253,8 +1253,13 @@ function appendPartyLineEntry(wrap, e) {
 }
 
 function doDetailSend() {
-  // wired up in SB-14
-  console.log('send not yet wired');
+  const to = document.getElementById('detail-send-to').value.trim();
+  const msg = document.getElementById('detail-send-msg').value.trim();
+  const type = document.getElementById('detail-send-type').value;
+  if (!to || !msg) return;
+  ws.send(JSON.stringify({ action: 'send', to, message: msg, type }));
+  document.getElementById('detail-send-msg').value = '';
+  document.getElementById('detail-send-msg').focus();
 }
 
 // --- History view ---
