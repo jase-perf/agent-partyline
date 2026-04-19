@@ -967,56 +967,14 @@ function prependTimelineEvent(event) {
 
 function loadSessionDetailView() {
   if (!selectedSessionId) return;
+  document.getElementById('detail-name').textContent = selectedSessionId;
+  document.getElementById('detail-send-to').value = selectedSessionId;
+  // Real loader arrives in SB-10
+}
 
-  var stateEl = document.getElementById('detail-state');
-  if (stateEl) { stateEl.textContent = '...'; stateEl.className = 'state-pill'; }
-  var nameEl = document.getElementById('detail-name');
-  if (nameEl) nameEl.textContent = selectedSessionId;
-  var cwdEl = document.getElementById('detail-cwd');
-  if (cwdEl) cwdEl.textContent = '';
-  var modelEl = document.getElementById('detail-model');
-  if (modelEl) modelEl.textContent = '';
-  var ctxEl = document.getElementById('detail-ctx');
-  if (ctxEl) ctxEl.textContent = '';
-
-  var subList = document.getElementById('detail-subagents');
-  var timeline = document.getElementById('detail-timeline');
-  if (subList) { subList.textContent = ''; subList.appendChild(makeEmptyLi('Loading...')); }
-  if (timeline) { timeline.textContent = ''; timeline.appendChild(makeEmptyLi('Loading...')); }
-
-  fetch('/api/session?id=' + encodeURIComponent(selectedSessionId))
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      populateDetailHeader(data.session);
-      if (subList) {
-        subList.textContent = '';
-        var subs = data.subagents || [];
-        if (subs.length === 0) {
-          subList.appendChild(makeEmptyLi('No subagents.'));
-        } else {
-          subs.forEach(function(sub) { subList.appendChild(buildSubagentItem(sub)); });
-        }
-      }
-    })
-    .catch(function() {
-      if (subList) { subList.textContent = ''; subList.appendChild(makeEmptyLi('Failed to load.')); }
-    });
-
-  fetch('/api/events?session_id=' + encodeURIComponent(selectedSessionId) + '&limit=200')
-    .then(function(r) { return r.json(); })
-    .then(function(events) {
-      if (timeline) {
-        timeline.textContent = '';
-        if (!events || events.length === 0) {
-          timeline.appendChild(makeEmptyLi('No events yet.'));
-        } else {
-          events.forEach(function(ev) { timeline.appendChild(buildTimelineItem(ev)); });
-        }
-      }
-    })
-    .catch(function() {
-      if (timeline) { timeline.textContent = ''; timeline.appendChild(makeEmptyLi('Failed to load events.')); }
-    });
+function doDetailSend() {
+  // wired up in SB-14
+  console.log('send not yet wired');
 }
 
 // --- History view ---
@@ -1177,5 +1135,10 @@ function addMessageToBus(msg) {
 
 sendBtn.addEventListener('click', doSend);
 sendMsg.addEventListener('keydown', function(e) { if (e.key === 'Enter') doSend(); });
+
+document.getElementById('detail-back').addEventListener('click', function() {
+  var tab = document.querySelector('button[data-view="switchboard"]');
+  if (tab) tab.click();
+});
 
 connect();
