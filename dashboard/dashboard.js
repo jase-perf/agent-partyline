@@ -67,6 +67,100 @@ let selectedAgentId = null;
 let currentSessionSubagents = [];
 var historyBuffer = [];
 
+// --- URL Router ---
+
+function parseUrl() {
+  const path = window.location.pathname;
+  // /session/<name>/agent/<id>
+  let m = path.match(/^\/session\/([^/]+)\/agent\/([^/]+)\/?$/);
+  if (m) return { view: 'session-detail', sessionName: decodeURIComponent(m[1]), agentId: m[2] };
+  // /session/<name>
+  m = path.match(/^\/session\/([^/]+)\/?$/);
+  if (m) return { view: 'session-detail', sessionName: decodeURIComponent(m[1]), agentId: null };
+  // /history/<sub>
+  m = path.match(/^\/history\/([^/]+)\/?$/);
+  if (m) return { view: 'history', subtab: m[1] };
+  // /history
+  if (path === '/history' || path === '/history/') return { view: 'history', subtab: 'events' };
+  // default
+  return { view: 'switchboard' };
+}
+
+function urlForView(state) {
+  if (!state) return '/';
+  if (state.view === 'switchboard') return '/';
+  if (state.view === 'history') {
+    return state.subtab && state.subtab !== 'events' ? '/history/' + state.subtab : '/history';
+  }
+  if (state.view === 'session-detail') {
+    const enc = encodeURIComponent(state.sessionName || '');
+    return state.agentId
+      ? '/session/' + enc + '/agent/' + encodeURIComponent(state.agentId)
+      : '/session/' + enc;
+  }
+  return '/';
+}
+
+function pushRoute(state) {
+  const url = urlForView(state);
+  if (window.location.pathname + window.location.search !== url) {
+    window.history.pushState(state, '', url);
+  }
+}
+
+function applyRoute(state, opts) {
+  opts = opts || {};
+  const sessionDetailTab = document.querySelector('button[data-view="session-detail"]');
+
+  if (state.view === 'session-detail') {
+    if (!state.sessionName) { applyRoute({ view: 'switchboard' }, { skipPush: true }); return; }
+    const known = Array.isArray(lastSessions) && lastSessions.some(s => s.name === state.sessionName);
+    selectedSessionId = state.sessionName;
+    selectedAgentId = state.agentId || null;
+    if (sessionDetailTab) { sessionDetailTab.disabled = false; }
+    document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+    if (sessionDetailTab) sessionDetailTab.classList.add('active');
+    renderView('session-detail');
+    if (!known) {
+      setTimeout(() => {
+        const stream = document.getElementById('detail-stream');
+        if (!stream) return;
+        stream.replaceChildren();
+        const p = document.createElement('p');
+        p.style.color = 'var(--text-dim)';
+        p.textContent = 'Session "' + state.sessionName + '" is not currently known to the dashboard. It may have ended or the name may have changed. ';
+        const back = document.createElement('a');
+        back.href = '/';
+        back.textContent = 'Back to Switchboard';
+        back.addEventListener('click', (e) => { e.preventDefault(); navigate({ view: 'switchboard' }); });
+        p.appendChild(back);
+        stream.appendChild(p);
+      }, 100);
+    }
+  } else if (state.view === 'history') {
+    document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+    const histTab = document.querySelector('button[data-view="history"]');
+    if (histTab) histTab.classList.add('active');
+    renderView('history');
+    if (state.subtab) {
+      const subBtn = document.querySelector('#history-subtabs button[data-subtab="' + state.subtab + '"]');
+      if (subBtn) subBtn.click();
+    }
+  } else {
+    // switchboard
+    document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+    const swTab = document.querySelector('button[data-view="switchboard"]');
+    if (swTab) swTab.classList.add('active');
+    renderView('switchboard');
+  }
+
+  if (!opts.skipPush) pushRoute(state);
+}
+
+function navigate(state) {
+  applyRoute(state, { skipPush: false });
+}
+
 // --- Tab router ---
 
 function renderView(view) {
@@ -93,9 +187,10 @@ function renderView(view) {
 document.getElementById('tabs').addEventListener('click', function(e) {
   var btn = e.target.closest('button[data-view]');
   if (!btn || btn.disabled) return;
-  document.querySelectorAll('.tabs button').forEach(function(b) { b.classList.remove('active'); });
-  btn.classList.add('active');
-  renderView(btn.dataset.view);
+  const view = btn.dataset.view;
+  if (view === 'switchboard') navigate({ view: 'switchboard' });
+  else if (view === 'history') navigate({ view: 'history' });
+  else if (view === 'session-detail' && selectedSessionId) navigate({ view: 'session-detail', sessionName: selectedSessionId, agentId: selectedAgentId });
 });
 
 function esc(s) {
@@ -821,14 +916,7 @@ function prependTimelineEvent(event) {
 }
 
 function openSessionDetail(sessionName) {
-  selectedSessionId = sessionName;
-  const tab = document.querySelector('button[data-view="session-detail"]');
-  if (tab) {
-    tab.disabled = false;
-    document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
-    tab.classList.add('active');
-    renderView('session-detail');
-  }
+  navigate({ view: 'session-detail', sessionName, agentId: null });
 }
 
 async function loadSessionDetailView() {
@@ -847,7 +935,8 @@ async function loadSessionDetailView() {
     console.warn('session fetch failed', e);
   }
 
-  selectedAgentId = null;
+  // selectedAgentId is set by the router before loadSessionDetailView is called;
+  // do not reset it here so deep-linked agent views are honoured.
   await renderStream();
 }
 
@@ -879,8 +968,7 @@ function renderAgentTree() {
   if (!selectedAgentId) mainLi.classList.add('active');
   mainLi.addEventListener('click', () => {
     selectedAgentId = null;
-    renderAgentTree();
-    renderStream();
+    navigate({ view: 'session-detail', sessionName: selectedSessionId, agentId: null });
     const sidebar = document.getElementById('detail-sidebar');
     if (sidebar) sidebar.classList.remove('open');
   });
@@ -943,8 +1031,7 @@ function buildAgentLi(sa) {
   li.addEventListener('click', (e) => {
     e.stopPropagation(); // don't bubble up and toggle the parent details group
     selectedAgentId = sa.agent_id;
-    renderAgentTree();
-    renderStream();
+    navigate({ view: 'session-detail', sessionName: selectedSessionId, agentId: sa.agent_id });
     const sidebar = document.getElementById('detail-sidebar');
     if (sidebar) sidebar.classList.remove('open');
   });
@@ -1333,6 +1420,9 @@ document.getElementById('history-subtabs').addEventListener('click', (e) => {
   document.querySelectorAll('section[data-view="history"] .subview').forEach(v => {
     v.hidden = v.dataset.subview !== sub;
   });
+  // Update URL without remounting the view
+  const url = sub === 'events' ? '/history' : '/history/' + sub;
+  window.history.replaceState({ view: 'history', subtab: sub }, '', url);
 });
 
 document.getElementById('detail-back').addEventListener('click', function() {
@@ -1368,25 +1458,23 @@ document.getElementById('detail-stream').addEventListener('click', (e) => {
   if (spawn) {
     e.preventDefault();           // stop native details toggle
     const aid = spawn.dataset.agentId;
-    if (aid) {
-      selectedAgentId = aid;
-      renderAgentTree();
-      renderStream();
-    }
+    if (aid) navigate({ view: 'session-detail', sessionName: selectedSessionId, agentId: aid });
     return;
   }
 
   const pl = e.target.closest('.pl-entry');
   if (pl && pl.dataset.otherSession) {
-    selectedSessionId = pl.dataset.otherSession;
-    const tab = document.querySelector('button[data-view="session-detail"]');
-    if (tab) {
-      tab.disabled = false;
-      tab.click();
-    }
-    loadSessionDetailView();
+    navigate({ view: 'session-detail', sessionName: pl.dataset.otherSession, agentId: null });
     return;
   }
 });
+
+window.addEventListener('popstate', (e) => {
+  const state = (e.state && typeof e.state === 'object') ? e.state : parseUrl();
+  applyRoute(state, { skipPush: true });
+});
+
+// Apply the initial route from URL
+applyRoute(parseUrl(), { skipPush: true });
 
 connect();
