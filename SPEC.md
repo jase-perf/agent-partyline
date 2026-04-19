@@ -209,9 +209,21 @@ The `/ingest` endpoint is designed for localhost + LAN. A remote machine (e.g. a
 - **Machines** — one card per host reporting events, with last-seen and session counts
 - **History** — filterable event feed across all sessions and machines
 
-### Gemini CLI support (planned, not yet shipped)
+### Gemini CLI support
 
-Gemini CLI has a compatible hooks system. Phase 7 (tasks 18-21 in the plan) will add a Gemini emitter and transcript observer, surfacing Gemini sessions in the dashboard alongside Claude Code ones. Gemini has no channels / wake-on-message equivalent, so Gemini sessions will be read-only in Mission Control.
+Gemini CLI has a near-parity hooks system (configured in `~/.gemini/settings.json`) and auto-saves per-session transcripts at `~/.gemini/tmp/<project_hash>/chats/session-*.json` as a single JSON file (not JSONL). Mission Control supports both:
+
+- `bun run hooks:install-gemini` — registers hook entries in `~/.gemini/settings.json` pointing at a copy of our emit script at `~/.config/party-line/gemini-emit.sh`. Gemini event names are mapped to our `HookEventName` union inside the emitter (e.g. `BeforeTool` → `PreToolUse`, `AfterAgent` → `Stop`).
+- The dashboard also runs a `GeminiTranscriptObserver` that polls `~/.gemini/tmp/*/chats/session-*.json` and diffs `messages[]` on modification, so Gemini activity surfaces in the dashboard even without hooks registered.
+- Events from Gemini sessions carry `source: "gemini-cli"` in the `events` and `sessions` tables, and the dashboard renders a small `GEM` badge on Gemini session cards.
+
+**Known gap — Gemini sessions are read-only in Mission Control.** Gemini CLI has no equivalent of Claude Code's `channels` feature and no wake-on-message. A Gemini session cannot receive a message from the party-line bus, and it cannot respond to an `party_line_request`. If bidirectional support becomes necessary, options are (in order of complexity):
+
+1. **A2A (Agent-to-Agent) adapter.** Gemini supports calling remote A2A agents over HTTP. A side process could expose the party-line as an A2A agent a Gemini session calls explicitly. This is an outbound-from-Gemini pattern — Gemini queries, doesn't receive pushes.
+2. **ACP mode.** `gemini --acp` exposes the session over the Agent Client Protocol. Still an outbound pattern.
+3. **Stdin injection.** Write to the Gemini CLI's tmux pane via `tmux load-buffer` / `paste-buffer`. This was the approach we rejected for Claude Code; same drawbacks apply. Last resort.
+
+None of these are in scope for this plan. Mission Control observes Gemini; it does not talk to it.
 
 ## File Structure
 
@@ -292,8 +304,6 @@ Note: Claude Code does not expose `--name` via env var to MCP subprocesses. The 
 - `fs.watch({ recursive: true })` is broken on Bun/Linux — JSONL observer uses polling instead.
 
 **Remaining work / future improvements:**
-- End-to-end verification of hook → ingest → SQLite → UI pipeline (Task 17 pending)
-- Gemini CLI support — Phase 7 (Tasks 18-21); will add Gemini emitter + transcript observer
 - Permission relay — forward tool approval prompts from headless sessions via party line
 - Structured message types — beyond plain text (status updates, task references, file paths)
 - Multi-address `to` field — array of session names for targeted broadcasts
@@ -308,7 +318,7 @@ Note: Claude Code does not expose `--name` via env var to MCP subprocesses. The 
 4. **Session resume by name**: `~/.claude/sessions/*.json` files contain name and sessionId. A future enhancement could let sessions find a previously-named session and resume it, rather than starting fresh with auto-naming.
 5. **Permission relay design**: forwarding tool approval prompts across sessions requires careful design — what's the right UX? Block the requesting session while waiting? Timeout and auto-deny? Currently unresolved.
 6. **Tool-call success detection** — `PostToolUse.tool_response` shape is tool-specific. Currently we heuristically detect failure via `tool_response.success === false`, `isError === true`, or `error` presence. A proper taxonomy per tool type would be more reliable.
-7. **Hook propagation into subagents** — not empirically verified whether `PreToolUse`/`PostToolUse` hooks configured in `~/.claude/settings.json` fire for tool calls originating in a subagent. Currently we fall back to `SubagentStart`/`SubagentStop` + tailing `<session>/subagents/agent-<id>.jsonl`.
+7. **Hook propagation into subagents** — not empirically verified whether `PreToolUse`/`PostToolUse` hooks configured in `~/.claude/settings.json` fire for tool calls originating in a subagent. We shipped with `SubagentStop` + subagent-transcript fallback (`<session>/subagents/agent-<id>.jsonl` tailing), but the parent-hook propagation path has **not been empirically confirmed**. If hooks do propagate into subagents, events will arrive with an `agent_id` field; if they don't, we rely entirely on the JSONL tail for subagent activity.
 
 ## Resolved Questions
 
