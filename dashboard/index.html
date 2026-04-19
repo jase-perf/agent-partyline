@@ -11,9 +11,8 @@
 <header>
   <h1>Party Line</h1>
   <nav class="tabs" id="tabs">
-    <button data-view="overview" class="active">Overview</button>
+    <button data-view="switchboard" class="active">Switchboard</button>
     <button data-view="session-detail" disabled>Session</button>
-    <button data-view="machines">Machines</button>
     <button data-view="history">History</button>
   </nav>
   <span class="conn-status" id="connStatus">connecting...</span>
@@ -21,7 +20,7 @@
 
 <div class="main">
 
-  <section data-view="overview" class="view active">
+  <section data-view="switchboard" class="view active">
     <div class="sessions">
       <h2>Sessions</h2>
       <div id="sessionList"><span style="color:var(--text-dim)">waiting for heartbeats...</span></div>
@@ -89,18 +88,7 @@
     </div>
   </section>
 
-  <section data-view="machines" class="view" hidden>
-    <h2>Machines</h2>
-    <table class="machines-table">
-      <thead>
-        <tr><th>ID</th><th>Hostname</th><th>First seen</th><th>Last seen</th></tr>
-      </thead>
-      <tbody id="machines-tbody"></tbody>
-    </table>
-    <p class="empty" id="machines-empty" hidden>No machines registered yet.</p>
-  </section>
-
-  <section data-view="history" class="view" hidden>
+<section data-view="history" class="view" hidden>
     <h2>History</h2>
 
     <details class="history-bus" id="historyBus">

@@ -15,7 +15,7 @@ let ws;
 let contextOverrides = {};
 let lastSessions = [];
 let sessionSources = {};  // session name -> source string, populated from session-update events
-let currentView = 'overview';
+let currentView = 'switchboard';
 let selectedSessionId = null;
 var historyBuffer = [];
 
@@ -33,7 +33,6 @@ function renderView(view) {
     active.hidden = false;
   }
   // Run view-specific init
-  if (view === 'machines') loadMachinesView();
   if (view === 'history') loadHistoryView();
   if (view === 'session-detail' && selectedSessionId) loadSessionDetailView();
 }
@@ -875,44 +874,6 @@ function loadSessionDetailView() {
     })
     .catch(function() {
       if (timeline) { timeline.textContent = ''; timeline.appendChild(makeEmptyLi('Failed to load events.')); }
-    });
-}
-
-// --- View loaders ---
-
-function loadMachinesView() {
-  var tbody = document.getElementById('machines-tbody');
-  var emptyMsg = document.getElementById('machines-empty');
-  if (!tbody) return;
-
-  tbody.textContent = '';
-
-  fetch('/api/machines')
-    .then(function(r) { return r.json(); })
-    .then(function(machines) {
-      if (!machines || machines.length === 0) {
-        if (emptyMsg) emptyMsg.hidden = false;
-        return;
-      }
-      if (emptyMsg) emptyMsg.hidden = true;
-      machines.forEach(function(m) {
-        var tr = document.createElement('tr');
-
-        function td(text) {
-          var cell = document.createElement('td');
-          cell.textContent = text || '';
-          return cell;
-        }
-
-        tr.appendChild(td(m.id));
-        tr.appendChild(td(m.hostname));
-        tr.appendChild(td(m.first_seen ? new Date(m.first_seen).toLocaleString() : ''));
-        tr.appendChild(td(m.last_seen ? new Date(m.last_seen).toLocaleString() : ''));
-        tbody.appendChild(tr);
-      });
-    })
-    .catch(function() {
-      if (emptyMsg) { emptyMsg.hidden = false; emptyMsg.textContent = 'Failed to load machines.'; }
     });
 }
 
