@@ -298,7 +298,8 @@
   .card-tool { margin-bottom: 2px; }
   .card-tool code { color: var(--accent); background: rgba(88,166,255,0.1); padding: 1px 4px; border-radius: 3px; }
   .card-last-text { font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; max-width: 100%; }
-  .card-meta { display: flex; gap: 10px; font-size: 10px; color: var(--text-dim); }
+  .card-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; font-size: 10px; color: var(--text-dim); }
+  .card-meta .model { background: var(--surface); border: 1px solid var(--border); padding: 1px 5px; border-radius: 3px; }
   .card-sparkline { margin-top: 4px; color: var(--text-dim); }
   .card-sparkline .sparkline { display: block; }
 
@@ -721,6 +722,9 @@
 .spawn-marker:hover { background: rgba(188, 140, 255, 0.15); }
 .spawn-desc { color: var(--text-dim); font-size: 11px; margin-top: 3px; }
 .spawn-click { color: var(--accent); font-size: 10px; margin-top: 4px; }
+details.spawn-marker summary { cursor: pointer; list-style: none; color: var(--text); }
+details.spawn-marker summary::-webkit-details-marker { display: none; }
+.spawn-desc-inline { color: var(--text-dim); margin-left: 4px; }
 .pl-entry { border-left: 3px solid var(--accent); padding: 6px 10px; margin: 6px 0; background: #0d1117; font-size: 12px; cursor: pointer; }
 .pl-entry.pl-request  { border-left-color: var(--yellow); }
 .pl-entry.pl-response { border-left-color: var(--green); }

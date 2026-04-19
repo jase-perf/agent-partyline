@@ -565,14 +565,16 @@ function buildCardContents(s) {
     var pct = Math.round((st.contextTokens / effLimit) * 100);
     var ctxSpan = document.createElement('span');
     ctxSpan.className = 'ctx';
-    ctxSpan.textContent = 'ctx ' + formatTokens(st.contextTokens) + ' (' + pct + '%)';
+    ctxSpan.textContent = 'ctx ' + formatTokens(st.contextTokens) + ' / ' + formatTokens(effLimit) + ' (' + pct + '%)';
     metaEl.appendChild(ctxSpan);
   }
 
-  var subsSpan = document.createElement('span');
-  subsSpan.className = 'subs';
-  subsSpan.textContent = '0 subagents';
-  metaEl.appendChild(subsSpan);
+  if (st && st.model) {
+    var modelSpan = document.createElement('span');
+    modelSpan.className = 'model';
+    modelSpan.textContent = st.model.replace(/^claude-/, '');
+    metaEl.appendChild(modelSpan);
+  }
 
   body.appendChild(metaEl);
 
@@ -609,6 +611,7 @@ function updateOverviewGrid(sessions) {
   if (!grid) return;
 
   sessions.forEach(function(s) {
+    if (s.name === 'dashboard') return;
     var existing = grid.querySelector('[data-session-id="' + CSS.escape(s.name) + '"]');
     if (existing) {
       // Update in place
@@ -1011,6 +1014,30 @@ function renderMarkdownInto(container, src) {
   });
 }
 
+function formatToolResponse(resp) {
+  if (resp == null) return '';
+  // String response (e.g. Bash stdout)
+  if (typeof resp === 'string') return resp;
+  // Common shape: { content: string }
+  if (typeof resp === 'object' && typeof resp.content === 'string') {
+    return resp.content;
+  }
+  // Anthropic tool_result format: { content: [ { type: 'text', text: '...' }, ... ] }
+  if (typeof resp === 'object' && Array.isArray(resp.content)) {
+    const texts = [];
+    for (const blk of resp.content) {
+      if (blk && typeof blk === 'object' && typeof blk.text === 'string') {
+        texts.push(blk.text);
+      } else if (typeof blk === 'string') {
+        texts.push(blk);
+      }
+    }
+    if (texts.length > 0) return texts.join('\n');
+  }
+  // Fallback: JSON
+  try { return JSON.stringify(resp, null, 2); } catch { return String(resp); }
+}
+
 function appendToolUse(wrap, e) {
   const details = document.createElement('details');
   details.className = 'tool-use';
@@ -1043,7 +1070,7 @@ function appendToolUse(wrap, e) {
   respDiv.appendChild(respLabel);
   if (e.tool_response !== undefined) {
     const respPre = document.createElement('pre');
-    respPre.textContent = JSON.stringify(e.tool_response, null, 2);
+    respPre.textContent = formatToolResponse(e.tool_response);
     respDiv.appendChild(respPre);
   } else {
     const em = document.createElement('em');
@@ -1071,25 +1098,31 @@ function summarizeToolInput(name, input) {
 }
 
 function appendSpawnMarker(wrap, e) {
-  const block = document.createElement('div');
-  block.className = 'spawn-marker';
-  if (e.agent_id) block.dataset.agentId = e.agent_id;
+  const details = document.createElement('details');
+  details.className = 'spawn-marker';
+  if (e.agent_id) details.dataset.agentId = e.agent_id;
+
+  const summary = document.createElement('summary');
   const title = document.createElement('strong');
   title.textContent = '→ spawned ' + (e.agent_type || 'subagent');
-  block.appendChild(title);
+  summary.appendChild(title);
   if (e.description) {
-    const desc = document.createElement('div');
-    desc.className = 'spawn-desc';
-    desc.textContent = '"' + e.description + '"';
-    block.appendChild(desc);
+    const sep = document.createTextNode(': ');
+    const desc = document.createElement('span');
+    desc.className = 'spawn-desc-inline';
+    desc.textContent = e.description;
+    summary.appendChild(sep);
+    summary.appendChild(desc);
   }
+  details.appendChild(summary);
+
   if (e.agent_id) {
     const hint = document.createElement('div');
     hint.className = 'spawn-click';
-    hint.textContent = 'Click to view this agent';
-    block.appendChild(hint);
+    hint.textContent = 'Click anywhere on this row to view the subagent';
+    details.appendChild(hint);
   }
-  wrap.appendChild(block);
+  wrap.appendChild(details);
 }
 
 function appendPartyLineEntry(wrap, e) {
@@ -1285,6 +1318,7 @@ document.getElementById('detail-stream').addEventListener('click', (e) => {
 
   const spawn = e.target.closest('.spawn-marker');
   if (spawn) {
+    e.preventDefault();           // stop native details toggle
     const aid = spawn.dataset.agentId;
     if (aid) {
       selectedAgentId = aid;
