@@ -1477,4 +1477,33 @@ window.addEventListener('popstate', (e) => {
 // Apply the initial route from URL
 applyRoute(parseUrl(), { skipPush: true });
 
+// --- Mobile keyboard handling ---
+// On iOS Safari the on-screen keyboard is an overlay that does not affect
+// 100dvh, so a sticky-positioned send bar ends up behind the keyboard and the
+// user sees empty padding after the keyboard dismisses. Track the visual
+// viewport and resize the body to match, plus scroll the focused input into
+// view when it gains focus.
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  function updateViewportHeight() {
+    // Pin body to the visual viewport's reported height.
+    document.body.style.height = vv.height + 'px';
+  }
+  vv.addEventListener('resize', updateViewportHeight);
+  vv.addEventListener('scroll', updateViewportHeight);
+  updateViewportHeight();
+}
+
+// When the user taps the send input, scroll the bottom of the stream into view
+// after the keyboard settles.
+document.addEventListener('focusin', (e) => {
+  const el = e.target;
+  if (!el || typeof el.matches !== 'function') return;
+  if (!el.matches('#detail-send-msg, #busSendMsg, #history-filter')) return;
+  // Give the keyboard ~200ms to animate in, then scroll.
+  setTimeout(() => {
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, 200);
+});
+
 connect();
