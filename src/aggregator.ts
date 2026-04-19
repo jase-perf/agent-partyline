@@ -35,6 +35,12 @@ export class Aggregator {
             ? 'idle'
             : undefined
 
+    const source =
+      ev.source ??
+      (typeof (ev.payload as { source?: unknown }).source === 'string'
+        ? (ev.payload as { source: string }).source
+        : 'claude-code')
+
     upsertSession(this.db, {
       session_id: ev.session_id || `${ev.machine_id}:${ev.session_name}`,
       machine_id: ev.machine_id,
@@ -43,6 +49,7 @@ export class Aggregator {
       last_seen: ev.ts,
       state: state ?? null,
       started_at: ev.hook_event === 'SessionStart' ? ev.ts : null,
+      source,
     })
 
     if (ev.hook_event === 'SubagentStart' && ev.agent_id) {

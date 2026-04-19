@@ -35,7 +35,7 @@ describe('storage', () => {
     const db = openDb(TEST_PATH)
     const row = db.query<{ user_version: number }, []>('PRAGMA user_version').get()
     expect(row?.user_version).toBe(SCHEMA_VERSION)
-    expect(row?.user_version).toBe(2)
+    expect(row?.user_version).toBe(3)
     db.close()
   })
 
@@ -111,6 +111,78 @@ describe('storage', () => {
       .all()
       .map((r) => r.name)
     expect(tables).toContain('metrics_daily')
+    db.close()
+  })
+
+  test('insertEvent defaults source to claude-code when omitted', () => {
+    const db = openDb(TEST_PATH)
+    insertEvent(db, {
+      machine_id: 'm1',
+      session_name: 'test',
+      session_id: 's1',
+      hook_event: 'Stop',
+      ts: '2026-04-19T12:00:00Z',
+      payload: {},
+    })
+    const rows = recentEvents(db, { sessionId: 's1', limit: 1 })
+    expect(rows[0]!.source).toBe('claude-code')
+    db.close()
+  })
+
+  test('insertEvent preserves source when specified', () => {
+    const db = openDb(TEST_PATH)
+    insertEvent(db, {
+      machine_id: 'm1',
+      session_name: 'gem',
+      session_id: 'gem-1',
+      hook_event: 'Stop',
+      ts: '2026-04-19T12:00:00Z',
+      payload: {},
+      source: 'gemini-cli',
+    })
+    const rows = recentEvents(db, { sessionId: 'gem-1', limit: 1 })
+    expect(rows[0]!.source).toBe('gemini-cli')
+    db.close()
+  })
+
+  test('insertEvent reads source from payload.source when ev.source absent', () => {
+    const db = openDb(TEST_PATH)
+    insertEvent(db, {
+      machine_id: 'm1',
+      session_name: 'gem2',
+      session_id: 'gem-2',
+      hook_event: 'Stop',
+      ts: '2026-04-19T12:00:00Z',
+      payload: { source: 'gemini-cli' },
+    })
+    const rows = recentEvents(db, { sessionId: 'gem-2', limit: 1 })
+    expect(rows[0]!.source).toBe('gemini-cli')
+    db.close()
+  })
+
+  test('upsertSession defaults source to claude-code when omitted', () => {
+    const db = openDb(TEST_PATH)
+    upsertSession(db, { session_id: 's2', machine_id: 'm1', name: 'test2', last_seen: 't1' })
+    const row = sessionState(db, 's2')
+    expect(row?.source).toBe('claude-code')
+    db.close()
+  })
+
+  test('upsertSession preserves source when specified', () => {
+    const db = openDb(TEST_PATH)
+    upsertSession(db, { session_id: 's3', machine_id: 'm1', name: 'gem2', last_seen: 't1', source: 'gemini-cli' })
+    const row = sessionState(db, 's3')
+    expect(row?.source).toBe('gemini-cli')
+    db.close()
+  })
+
+  test('upsertSession source is immutable after first write (conflict does not update source)', () => {
+    const db = openDb(TEST_PATH)
+    upsertSession(db, { session_id: 's4', machine_id: 'm1', name: 'x', last_seen: 't1', source: 'gemini-cli' })
+    // Second upsert with different source — should not overwrite
+    upsertSession(db, { session_id: 's4', machine_id: 'm1', name: 'x', last_seen: 't2', source: 'claude-code' })
+    const row = sessionState(db, 's4')
+    expect(row?.source).toBe('gemini-cli')
     db.close()
   })
 })

@@ -14,6 +14,7 @@ export interface SessionRow {
   last_text: string | null
   last_seen: string
   started_at: string | null
+  source: string
 }
 
 export interface EventRow {
@@ -26,6 +27,7 @@ export interface EventRow {
   agent_id: string | null
   agent_type: string | null
   payload: Record<string, unknown>
+  source: string
 }
 
 export interface UpsertSessionInput {
@@ -41,12 +43,21 @@ export interface UpsertSessionInput {
   message_count?: number | null
   last_text?: string | null
   started_at?: string | null
+  source?: string
 }
 
 export function insertEvent(db: Database, ev: HookEvent): void {
+  // Extract source: prefer top-level ev.source, fall back to payload.source (Gemini emitter),
+  // then default to 'claude-code'. Mirrors the same logic in Aggregator.ingest().
+  const source =
+    ev.source ??
+    (typeof (ev.payload as { source?: unknown }).source === 'string'
+      ? (ev.payload as { source: string }).source
+      : 'claude-code')
+
   db.query(
-    `INSERT INTO events (machine_id, session_id, session_name, hook_event, ts, agent_id, agent_type, payload_json)
-     VALUES ($machine_id, $session_id, $session_name, $hook_event, $ts, $agent_id, $agent_type, $payload_json)`,
+    `INSERT INTO events (machine_id, session_id, session_name, hook_event, ts, agent_id, agent_type, payload_json, source)
+     VALUES ($machine_id, $session_id, $session_name, $hook_event, $ts, $agent_id, $agent_type, $payload_json, $source)`,
   ).run({
     $machine_id: ev.machine_id,
     $session_id: ev.session_id,
@@ -56,13 +67,14 @@ export function insertEvent(db: Database, ev: HookEvent): void {
     $agent_id: ev.agent_id ?? null,
     $agent_type: ev.agent_type ?? null,
     $payload_json: JSON.stringify(ev.payload),
+    $source: source,
   })
 }
 
 export function upsertSession(db: Database, s: UpsertSessionInput): void {
   db.query(
-    `INSERT INTO sessions (session_id, machine_id, name, cwd, last_seen, state, model, git_branch, context_tokens, message_count, last_text, started_at)
-     VALUES ($session_id, $machine_id, $name, $cwd, $last_seen, $state, $model, $git_branch, $context_tokens, $message_count, $last_text, $started_at)
+    `INSERT INTO sessions (session_id, machine_id, name, cwd, last_seen, state, model, git_branch, context_tokens, message_count, last_text, started_at, source)
+     VALUES ($session_id, $machine_id, $name, $cwd, $last_seen, $state, $model, $git_branch, $context_tokens, $message_count, $last_text, $started_at, COALESCE($source, 'claude-code'))
      ON CONFLICT(session_id) DO UPDATE SET
        name = excluded.name,
        cwd = COALESCE(excluded.cwd, sessions.cwd),
@@ -87,6 +99,7 @@ export function upsertSession(db: Database, s: UpsertSessionInput): void {
     $message_count: s.message_count ?? null,
     $last_text: s.last_text ?? null,
     $started_at: s.started_at ?? null,
+    $source: s.source ?? null,
   })
 }
 

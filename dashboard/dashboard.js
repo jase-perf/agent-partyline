@@ -14,6 +14,7 @@ let totalMessages = 0;
 let ws;
 let contextOverrides = {};
 let lastSessions = [];
+let sessionSources = {};  // session name -> source string, populated from session-update events
 let currentView = 'overview';
 let selectedSessionId = null;
 var historyBuffer = [];
@@ -490,6 +491,24 @@ function fetchAndRenderSparkline(sessionId, containerEl) {
 
 // --- Overview grid: session cards ---
 
+function sourceBadge(source) {
+  var badge = document.createElement('span');
+  if (!source || source === 'claude-code') {
+    badge.className = 'src-badge src-cc';
+    badge.title = 'Claude Code';
+    badge.textContent = 'cc';
+  } else if (source === 'gemini-cli') {
+    badge.className = 'src-badge src-gemini';
+    badge.title = 'Gemini CLI';
+    badge.textContent = 'gem';
+  } else {
+    badge.className = 'src-badge';
+    badge.title = source;
+    badge.textContent = source.slice(0, 3);
+  }
+  return badge;
+}
+
 function stateClass(state) {
   if (state === 'working') return 'state-working';
   if (state === 'idle') return 'state-idle';
@@ -509,6 +528,8 @@ function buildCardContents(s) {
   pill.className = 'state-pill ' + stateClass(state);
   pill.textContent = state;
   header.appendChild(pill);
+
+  header.appendChild(sourceBadge(sessionSources[s.name]));
 
   var nameEl = document.createElement('span');
   nameEl.className = 'session-name';
@@ -631,6 +652,11 @@ function handleSessionUpdate(session) {
   // Update the card in the overview grid if it exists
   // session here is an aggregated DB session with session_id, not the heartbeat session
   if (!session || !session.session_id) return;
+
+  // Record source for this session (keyed by name for card rendering)
+  if (session.name && session.source) {
+    sessionSources[session.name] = session.source;
+  }
 
   // Update detail view header if we're viewing this session
   if (currentView === 'session-detail' && selectedSessionId === session.session_id) {

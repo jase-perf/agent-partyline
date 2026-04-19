@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SCHEMA_PATH = join(__dirname, 'schema.sql')
 
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 type Migration = (db: Database) => void
 const MIGRATIONS: Record<number, Migration> = {
@@ -21,6 +21,12 @@ const MIGRATIONS: Record<number, Migration> = {
         PRIMARY KEY (day, session_id)
       );
       CREATE INDEX IF NOT EXISTS idx_metrics_day ON metrics_daily(day);
+    `)
+  },
+  3: (db) => {
+    db.exec(`
+      ALTER TABLE events ADD COLUMN source TEXT DEFAULT 'claude-code';
+      ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT 'claude-code';
     `)
   },
 }

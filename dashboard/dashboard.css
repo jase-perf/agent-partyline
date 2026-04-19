@@ -276,6 +276,17 @@
     margin-bottom: 6px;
   }
   .card-header .session-name { font-weight: 600; font-size: 13px; color: var(--text); }
+  .src-badge {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 2px 4px;
+    border-radius: 3px;
+    margin-right: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .src-cc { background: #1a73e8; color: white; }
+  .src-gemini { background: #8e44ec; color: white; }
   .card-body { font-size: 11px; color: var(--text-dim); }
   .card-tool { margin-bottom: 2px; }
   .card-tool code { color: var(--accent); background: rgba(88,166,255,0.1); padding: 1px 4px; border-radius: 3px; }

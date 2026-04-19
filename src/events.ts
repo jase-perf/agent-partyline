@@ -28,6 +28,7 @@ export interface HookEvent {
   payload: Record<string, unknown>
   agent_id?: string
   agent_type?: string
+  source?: string  // "claude-code" | "gemini-cli" | future other — optional, default "claude-code"
 }
 
 const STRING_FIELDS = ['machine_id', 'session_name', 'session_id', 'hook_event', 'ts'] as const
@@ -54,6 +55,9 @@ export function validateHookEvent(raw: unknown): HookEvent {
     if (key in obj && typeof obj[key] !== 'string') {
       throw new Error(`HookEvent field ${key} must be string when present`)
     }
+  }
+  if ('source' in obj && typeof obj.source !== 'string') {
+    throw new Error('HookEvent field source must be string when present')
   }
   return obj as unknown as HookEvent
 }

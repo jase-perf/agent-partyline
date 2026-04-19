@@ -91,4 +91,21 @@ describe('validateHookEvent', () => {
     }
     expect(() => validateHookEvent(raw)).toThrow(/payload/)
   })
+
+  test('accepts event with optional source field', () => {
+    const raw = {
+      machine_id: 'm', session_name: 'x', session_id: 's',
+      hook_event: 'Stop', ts: 't', payload: {}, source: 'gemini-cli',
+    }
+    const ev = validateHookEvent(raw)
+    expect(ev.source).toBe('gemini-cli')
+  })
+
+  test('rejects non-string source', () => {
+    const raw = {
+      machine_id: 'm', session_name: 'x', session_id: 's',
+      hook_event: 'Stop', ts: 't', payload: {}, source: 42,
+    }
+    expect(() => validateHookEvent(raw)).toThrow(/source/)
+  })
 })

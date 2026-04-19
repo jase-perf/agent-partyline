@@ -140,4 +140,40 @@ describe('Aggregator', () => {
     expect(list[1]!.session_id).toBe('s1')
     db.close()
   })
+
+  test('aggregator reads source from ev.source', () => {
+    const db = openDb(DB)
+    const agg = new Aggregator(db)
+    agg.ingest({
+      machine_id: 'm', session_name: 'gem', session_id: 'gem-1', hook_event: 'Stop',
+      ts: 't', payload: {}, source: 'gemini-cli',
+    })
+    const s = agg.getSession('gem-1')
+    expect(s?.source).toBe('gemini-cli')
+    db.close()
+  })
+
+  test('aggregator reads source from payload.source when ev.source absent', () => {
+    const db = openDb(DB)
+    const agg = new Aggregator(db)
+    agg.ingest({
+      machine_id: 'm', session_name: 'gem2', session_id: 'gem-2', hook_event: 'Stop',
+      ts: 't', payload: { source: 'gemini-cli' },
+    })
+    const s = agg.getSession('gem-2')
+    expect(s?.source).toBe('gemini-cli')
+    db.close()
+  })
+
+  test('aggregator defaults source to claude-code when neither present', () => {
+    const db = openDb(DB)
+    const agg = new Aggregator(db)
+    agg.ingest({
+      machine_id: 'm', session_name: 'cc', session_id: 'cc-1', hook_event: 'Stop',
+      ts: 't', payload: {},
+    })
+    const s = agg.getSession('cc-1')
+    expect(s?.source).toBe('claude-code')
+    db.close()
+  })
 })
