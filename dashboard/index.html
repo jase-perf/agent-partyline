@@ -21,6 +21,14 @@
 <div class="main">
 
   <section data-view="switchboard" class="view active">
+  <div class="switchboard-wrap">
+    <svg id="cross-call-overlay" class="cross-overlay" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow-blue" viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,-5L10,0L0,5" fill="#58a6ff"/></marker>
+        <marker id="arrow-yellow" viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,-5L10,0L0,5" fill="#d29922"/></marker>
+        <marker id="arrow-green" viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,-5L10,0L0,5" fill="#3fb950"/></marker>
+      </defs>
+    </svg>
     <div class="sessions">
       <h2>Sessions</h2>
       <div id="sessionList"><span style="color:var(--text-dim)">waiting for heartbeats...</span></div>
@@ -64,6 +72,7 @@
         </div>
       </div>
     </div>
+  </div>
   </section>
 
   <section data-view="session-detail" class="view" hidden>

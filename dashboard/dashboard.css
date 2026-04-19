@@ -600,3 +600,23 @@
     text-align: center;
     margin-left: auto;
   }
+
+  .switchboard-wrap { position: relative; display: flex; flex: 1; overflow: hidden; }
+  .cross-overlay {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 10;
+  }
+  .cross-overlay .arrow {
+    fill: none;
+    stroke-width: 2;
+    opacity: 0.9;
+    transition: opacity 4s linear;
+  }
+  .cross-overlay .arrow.fade { opacity: 0; }
+  .cross-overlay .arrow.message  { stroke: var(--accent); }
+  .cross-overlay .arrow.request  { stroke: var(--yellow); }
+  .cross-overlay .arrow.response { stroke: var(--green); }

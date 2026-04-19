@@ -131,7 +131,39 @@ function connect() {
     else if (data.type === 'overrides') { contextOverrides = data.data; updateSessions(lastSessions); }
     else if (data.type === 'session-update') { handleSessionUpdate(data.data); bumpUnread(data.data.name); }
     else if (data.type === 'jsonl') { handleJsonlEvent(data.data); bumpUnread(resolveNameFromJsonlPath(data.data.file_path) || data.data.session_id); }
+    else if (data.type === 'cross-call') handleCrossCall(data.data);
   };
+}
+
+function handleCrossCall(call) {
+  if (currentView !== 'switchboard') return;
+  var overlay = document.getElementById('cross-call-overlay');
+  if (!overlay) return;
+  var fromCard = document.querySelector('[data-session-id="' + CSS.escape(call.from) + '"]');
+  var toCard = document.querySelector('[data-session-id="' + CSS.escape(call.to) + '"]');
+  if (!fromCard || !toCard) return;
+
+  var oRect = overlay.getBoundingClientRect();
+  var fRect = fromCard.getBoundingClientRect();
+  var tRect = toCard.getBoundingClientRect();
+  var fx = fRect.left + fRect.width / 2 - oRect.left;
+  var fy = fRect.top + fRect.height / 2 - oRect.top;
+  var tx = tRect.left + tRect.width / 2 - oRect.left;
+  var ty = tRect.top + tRect.height / 2 - oRect.top;
+
+  var colorClass = call.envelope_type;
+  var markerId = 'arrow-' + (colorClass === 'message' ? 'blue' : colorClass === 'request' ? 'yellow' : 'green');
+  var ns = 'http://www.w3.org/2000/svg';
+  var line = document.createElementNS(ns, 'path');
+  line.setAttribute('class', 'arrow ' + colorClass);
+  line.setAttribute('d', 'M ' + fx + ',' + fy + ' L ' + tx + ',' + ty);
+  line.setAttribute('marker-end', 'url(#' + markerId + ')');
+  overlay.appendChild(line);
+
+  requestAnimationFrame(function() {
+    requestAnimationFrame(function() { line.classList.add('fade'); });
+  });
+  setTimeout(function() { line.remove(); }, 4500);
 }
 
 function formatUptime(ms) {
