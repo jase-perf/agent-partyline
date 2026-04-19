@@ -15,6 +15,13 @@ import { PartyLineMonitor } from './monitor.js'
 import { startQuotaPoller, stopQuotaPoller, getQuota } from './quota.js'
 import type { Envelope } from '../src/types.js'
 import type { ServerWebSocket } from 'bun'
+import { openDb } from '../src/storage/db.js'
+import { Aggregator } from '../src/aggregator.js'
+import { handleIngest } from '../src/ingest/http.js'
+import { loadOrCreateToken } from '../src/ingest/auth.js'
+import { getMachineId } from '../src/machine-id.js'
+import { JsonlObserver } from '../src/observers/jsonl.js'
+import { recentEvents } from '../src/storage/queries.js'
 
 // --- Args ---
 
@@ -53,6 +60,32 @@ function saveOverrides(overrides: ContextOverrides): void {
 
 const monitor = new PartyLineMonitor(NAME)
 const wsClients = new Set<ServerWebSocket<unknown>>()
+
+// --- Mission Control: hook event ingest + storage ---
+
+const CONFIG_DIR = resolve(process.env.HOME ?? '/home/claude', '.config/party-line')
+const DB_PATH = join(CONFIG_DIR, 'dashboard.db')
+const TOKEN_PATH = join(CONFIG_DIR, 'ingest-token')
+const MACHINE_ID_PATH = join(CONFIG_DIR, 'machine-id')
+
+mkdirSync(CONFIG_DIR, { recursive: true })
+const db = openDb(DB_PATH)
+const token = loadOrCreateToken(TOKEN_PATH)
+const machineId = getMachineId(MACHINE_ID_PATH)
+const aggregator = new Aggregator(db)
+
+aggregator.onUpdate((session) => {
+  const json = JSON.stringify({ type: 'session-update', data: session })
+  for (const ws of wsClients) ws.send(json)
+})
+
+const jsonlObserver = new JsonlObserver(
+  join(process.env.HOME ?? '/home/claude', '.claude', 'projects'),
+)
+jsonlObserver.on((u) => {
+  const json = JSON.stringify({ type: 'jsonl', data: u })
+  for (const ws of wsClients) ws.send(json)
+})
 
 monitor.onMessage((envelope) => {
   const json = JSON.stringify({ type: 'message', data: envelope })
@@ -163,6 +196,41 @@ const server = Bun.serve({
       })()
     }
 
+    // REST API: ingest hook events
+    if (url.pathname === '/ingest') {
+      return handleIngest(req, {
+        db,
+        token,
+        onEvent: (ev) => aggregator.ingest(ev),
+      })
+    }
+
+    // REST API: single session + subagents
+    if (url.pathname === '/api/session' && url.searchParams.get('id')) {
+      const id = url.searchParams.get('id')!
+      return Response.json({
+        session: aggregator.getSession(id),
+        subagents: aggregator.getSubagents(id),
+      })
+    }
+
+    // REST API: recent events (all or filtered by session)
+    if (url.pathname === '/api/events') {
+      const id = url.searchParams.get('session_id') ?? undefined
+      const limit = parseInt(url.searchParams.get('limit') ?? '50', 10)
+      return Response.json(recentEvents(db, { sessionId: id, limit }))
+    }
+
+    // REST API: machines
+    if (url.pathname === '/api/machines') {
+      const machines = db
+        .query<{ id: string; hostname: string; first_seen: string; last_seen: string }, []>(
+          'SELECT * FROM machines ORDER BY last_seen DESC',
+        )
+        .all()
+      return Response.json(machines)
+    }
+
     // Dashboard HTML
     return new Response(indexHtml, {
       headers: { 'Content-Type': 'text/html' },
@@ -215,17 +283,23 @@ const server = Bun.serve({
 
 async function main(): Promise<void> {
   await monitor.start()
+  await jsonlObserver.start()
   startQuotaPoller(300_000) // poll every 5 minutes
   console.log(`Party Line Dashboard`)
-  console.log(`  Web UI:  http://localhost:${PORT}`)
-  console.log(`  WS:     ws://localhost:${PORT}/ws`)
-  console.log(`  Name:    ${NAME}`)
+  console.log(`  Web UI:   http://localhost:${PORT}`)
+  console.log(`  Ingest:   http://localhost:${PORT}/ingest`)
+  console.log(`  Token:    ${TOKEN_PATH}`)
+  console.log(`  DB:       ${DB_PATH}`)
+  console.log(`  Machine:  ${machineId}`)
   console.log(`  Multicast: 239.77.76.10:47100`)
-  console.log(`  Quota:   polling every 5 min`)
+  console.log(`  Name:     ${NAME}`)
+  console.log(`  Quota:    polling every 5 min`)
   console.log()
 }
 
 function shutdown(): void {
+  jsonlObserver.stop()
+  db.close()
   stopQuotaPoller()
   monitor.stop()
   server.stop()
