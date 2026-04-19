@@ -383,6 +383,39 @@
 
   .empty-msg { color: var(--text-dim); font-size: 11px; padding: 8px 0; list-style: none; }
 
+  /* Machines view */
+  .view[data-view="machines"] h2,
+  .view[data-view="history"] h2 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 14px;
+  }
+  .machines-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  .machines-table th {
+    text-align: left;
+    padding: 6px 12px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--border);
+  }
+  .machines-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    font-size: 12px;
+  }
+  .machines-table td:first-child { font-family: monospace; font-size: 10px; color: var(--text-dim); }
+  .machines-table tr:last-child td { border-bottom: none; }
+  .machines-table tr:hover td { background: var(--surface); }
+  .empty { color: var(--text-dim); font-size: 12px; margin-top: 12px; }
+
   /* Tab bar */
   .tabs {
     display: flex;

@@ -90,7 +90,14 @@
   </section>
 
   <section data-view="machines" class="view" hidden>
-    <p class="placeholder">Machines view — coming soon.</p>
+    <h2>Machines</h2>
+    <table class="machines-table">
+      <thead>
+        <tr><th>ID</th><th>Hostname</th><th>First seen</th><th>Last seen</th></tr>
+      </thead>
+      <tbody id="machines-tbody"></tbody>
+    </table>
+    <p class="empty" id="machines-empty" hidden>No machines registered yet.</p>
   </section>
 
   <section data-view="history" class="view" hidden>
