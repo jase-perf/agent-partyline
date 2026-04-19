@@ -380,39 +380,31 @@ function doBusSend() {
 }
 
 function updateQuota(q) {
-  document.getElementById('quotaPanel').style.display = '';
+  const panel = document.getElementById('quotaPanel');
+  if (!panel) return;
+  panel.hidden = false;
 
-  function setBar(barId, pctId, resetId, util, resetTs) {
-    var pct = Math.round(util * 100);
-    var bar = document.getElementById(barId);
-    var label = document.getElementById(pctId);
-    var resetEl = document.getElementById(resetId);
-
+  function setPip(pipId, pctId, util, resetTs, windowLabel) {
+    const pip = document.getElementById(pipId);
+    const label = document.getElementById(pctId);
+    if (!pip || !label) return;
+    const pct = Math.round(util * 100);
     label.textContent = pct + '%';
-    bar.style.width = Math.min(pct, 100) + '%';
-    bar.className = 'quota-bar-fg';
-    if (pct > 90) bar.className += ' crit';
-    else if (pct > 70) bar.className += ' warn';
-    else bar.className += ' ok';
-
+    pip.classList.remove('ok', 'warn', 'crit');
+    if (pct > 90) pip.classList.add('crit');
+    else if (pct > 70) pip.classList.add('warn');
+    else pip.classList.add('ok');
     if (resetTs) {
-      var resetDate = new Date(resetTs * 1000);
-      var now = Date.now();
-      var diffMin = Math.max(0, Math.round((resetDate.getTime() - now) / 60000));
-      var h = Math.floor(diffMin / 60);
-      var m = diffMin % 60;
-      var timeStr = h > 0 ? h + 'h ' + m + 'm' : m + 'm';
-      resetEl.textContent = 'resets in ' + timeStr;
+      const diffMin = Math.max(0, Math.round((resetTs * 1000 - Date.now()) / 60000));
+      const h = Math.floor(diffMin / 60);
+      const m = diffMin % 60;
+      const timeStr = h > 0 ? h + 'h ' + m + 'm' : m + 'm';
+      pip.title = windowLabel + ' window: ' + pct + '% — resets in ' + timeStr;
     }
   }
 
-  setBar('quota5hBar', 'quota5hPct', 'quota5hReset', q.fiveHourUtilization, q.fiveHourReset);
-  setBar('quota7dBar', 'quota7dPct', 'quota7dReset', q.sevenDayUtilization, q.sevenDayReset);
-
-  if (q.fetchedAt) {
-    var ago = Math.round((Date.now() - new Date(q.fetchedAt).getTime()) / 1000);
-    document.getElementById('quotaFetched').textContent = ago < 60 ? 'just now' : Math.round(ago / 60) + 'm ago';
-  }
+  setPip('quota5hPip', 'quota5hPct', q.fiveHourUtilization, q.fiveHourReset, '5-hour');
+  setPip('quota7dPip', 'quota7dPct', q.sevenDayUtilization, q.sevenDayReset, '7-day');
 }
 
 // --- Sparkline ---
