@@ -11,6 +11,10 @@ CREATE TABLE IF NOT EXISTS machines (
   last_seen TEXT NOT NULL
 );
 
+-- No FKs on machine_id / session_id in any of sessions, events, tool_calls,
+-- subagents: hook events can arrive before the SessionStart event has
+-- created the parent row, and sessions can arrive before machine
+-- registration. The aggregator upserts lazily. See Task 10.
 CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT PRIMARY KEY,
   machine_id TEXT NOT NULL,
@@ -23,16 +27,12 @@ CREATE TABLE IF NOT EXISTS sessions (
   git_branch TEXT,
   context_tokens INTEGER,
   message_count INTEGER,
-  last_text TEXT,
-  FOREIGN KEY (machine_id) REFERENCES machines(id)
+  last_text TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_machine ON sessions(machine_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_lastseen ON sessions(last_seen);
 CREATE INDEX IF NOT EXISTS idx_sessions_name ON sessions(name);
 
--- No FK on session_id / machine_id for events, tool_calls, or subagents:
--- hook events can arrive before the SessionStart event has created the parent row.
--- The aggregator upserts sessions lazily. See Task 10.
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   machine_id TEXT NOT NULL,
