@@ -805,25 +805,28 @@ function handleSessionUpdate(session) {
   if (currentView === 'session-detail' && selectedSessionId === session.session_id) {
     updateDetailHeader(session);
   }
+
+  // Live-patch the session detail view when the viewed session receives an update
+  if (currentView === 'session-detail' && session && session.name === selectedSessionId) {
+    renderDetailHeader(session);
+    fetch('/api/session?id=' + encodeURIComponent(selectedSessionId))
+      .then(r => r.json())
+      .then(data => {
+        currentSessionSubagents = data.subagents || [];
+        renderAgentTree();
+      })
+      .catch(() => {});
+  }
 }
 
-function handleJsonlEvent(event) {
-  if (!event) return;
-  // Append to timeline if we're viewing the relevant session
-  if (currentView === 'session-detail' && selectedSessionId) {
-    if (event.session_id === selectedSessionId || event.session_name === selectedSessionId) {
-      prependTimelineEvent(event);
-    }
-  }
-  // Append to history list if loaded
-  if (historyLoaded) {
-    var list = document.getElementById('history-list');
-    var emptyMsg = list && list.querySelector('.empty-msg');
-    if (emptyMsg) emptyMsg.remove();
-    addHookOption(event.hook_event);
-    if (list) list.appendChild(buildHistoryItem(event));
-    applyHistoryFilters();
-  }
+function handleJsonlEvent(update) {
+  if (currentView !== 'session-detail') return;
+  if (!update) return;
+  const parentMatches = update.session_id === selectedSessionId
+    || resolveNameFromJsonlPath(update.file_path) === selectedSessionId;
+  const agentMatches = selectedAgentId && update.session_id === selectedAgentId;
+  if (!parentMatches && !agentMatches) return;
+  renderStream();
 }
 
 // --- Session detail view ---
