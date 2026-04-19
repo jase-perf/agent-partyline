@@ -871,8 +871,9 @@ function renderDetailHeader(session) {
 
 function renderAgentTree() {
   const ul = document.getElementById('detail-tree');
-  ul.textContent = '';
+  ul.replaceChildren();
 
+  // 'main' row — always visible at top
   const mainLi = document.createElement('li');
   mainLi.dataset.agentId = '';
   mainLi.textContent = '▸ main';
@@ -881,30 +882,74 @@ function renderAgentTree() {
     selectedAgentId = null;
     renderAgentTree();
     renderStream();
-    document.getElementById('detail-sidebar').classList.remove('open');
+    const sidebar = document.getElementById('detail-sidebar');
+    if (sidebar) sidebar.classList.remove('open');
   });
   ul.appendChild(mainLi);
 
+  // Partition subagents into running vs completed
+  const running = [];
+  const completed = [];
   for (const sa of currentSessionSubagents) {
-    const li = document.createElement('li');
-    li.dataset.agentId = sa.agent_id;
-    li.style.paddingLeft = '16px';
     const status = sa.status || 'running';
-    const label = sa.agent_type || sa.agent_id.slice(0, 6);
-    const labelNode = document.createTextNode('└ ' + label + ' ');
-    const dot = document.createElement('span');
-    dot.className = 'dot ' + status;
-    li.appendChild(labelNode);
-    li.appendChild(dot);
-    if (selectedAgentId === sa.agent_id) li.classList.add('active');
-    li.addEventListener('click', () => {
-      selectedAgentId = sa.agent_id;
-      renderAgentTree();
-      renderStream();
-      document.getElementById('detail-sidebar').classList.remove('open');
-    });
-    ul.appendChild(li);
+    if (status === 'running') running.push(sa);
+    else completed.push(sa);
   }
+
+  // Sort most-recent-first for both (by started_at descending)
+  running.sort((a, b) => (b.started_at || '').localeCompare(a.started_at || ''));
+  completed.sort((a, b) => (b.started_at || '').localeCompare(a.started_at || ''));
+
+  // Running — individual rows
+  for (const sa of running) {
+    ul.appendChild(buildAgentLi(sa));
+  }
+
+  // Completed — collapsed under a details/summary group
+  if (completed.length > 0) {
+    const groupLi = document.createElement('li');
+    groupLi.className = 'agent-group';
+    groupLi.style.paddingLeft = '0';
+    const details = document.createElement('details');
+    // Auto-open when the selected subagent is inside the completed group
+    if (selectedAgentId && completed.some(sa => sa.agent_id === selectedAgentId)) {
+      details.open = true;
+    }
+    const summary = document.createElement('summary');
+    summary.textContent = 'Completed (' + completed.length + ')';
+    details.appendChild(summary);
+    const subUl = document.createElement('ul');
+    subUl.className = 'agent-group-list';
+    for (const sa of completed) {
+      subUl.appendChild(buildAgentLi(sa));
+    }
+    details.appendChild(subUl);
+    groupLi.appendChild(details);
+    ul.appendChild(groupLi);
+  }
+}
+
+function buildAgentLi(sa) {
+  const li = document.createElement('li');
+  li.dataset.agentId = sa.agent_id;
+  const status = sa.status || 'running';
+  const label = sa.agent_type || sa.agent_id.slice(0, 6);
+  const desc = sa.description ? ' — ' + sa.description.slice(0, 50) : '';
+  const labelNode = document.createTextNode('└ ' + label + desc + ' ');
+  const dot = document.createElement('span');
+  dot.className = 'dot ' + status;
+  li.appendChild(labelNode);
+  li.appendChild(dot);
+  if (selectedAgentId === sa.agent_id) li.classList.add('active');
+  li.addEventListener('click', (e) => {
+    e.stopPropagation(); // don't bubble up and toggle the parent details group
+    selectedAgentId = sa.agent_id;
+    renderAgentTree();
+    renderStream();
+    const sidebar = document.getElementById('detail-sidebar');
+    if (sidebar) sidebar.classList.remove('open');
+  });
+  return li;
 }
 
 async function renderStream() {

@@ -664,6 +664,20 @@
 #detail-tree li .dot.running   { background: var(--yellow); }
 #detail-tree li .dot.completed { background: var(--green); }
 #detail-tree li .dot.errored   { background: var(--red); }
+#detail-tree .agent-group > details > summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 4px 6px;
+  list-style: none;
+  margin-top: 6px;
+}
+#detail-tree .agent-group > details > summary::-webkit-details-marker { display: none; }
+#detail-tree .agent-group > details[open] > summary { color: var(--text); }
+#detail-tree .agent-group-list { list-style: none; padding: 0; margin: 0; }
+#detail-tree .agent-group-list li { padding-left: 16px; }
 .detail-stream {
   padding: 14px;
   overflow-y: auto;
