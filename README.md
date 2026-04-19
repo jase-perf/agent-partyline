@@ -108,6 +108,45 @@ ccpl research
 
 Now send a message between them — either from the dashboard or by asking Claude to use `party_line_send`.
 
+## Observability (Mission Control)
+
+The dashboard passively captures what every Claude Code session on this machine is doing — tool calls, subagent spawns, user prompts, session start/end — via hooks, and surfaces them in a live multi-view UI.
+
+### Install
+
+```bash
+# Start the dashboard (if not already running)
+bun dashboard/serve.ts
+
+# Install hooks globally — any Claude Code session will now emit to the dashboard
+bun run hooks:install
+```
+
+Visit [http://localhost:3400](http://localhost:3400).
+
+### Uninstall
+
+```bash
+bun run hooks:uninstall
+```
+
+This removes the party-line hook entries from `~/.claude/settings.json`. Other hooks are preserved.
+
+### Data storage
+
+Events land in `~/.config/party-line/dashboard.db` (SQLite). Events older than 30 days are pruned automatically on dashboard startup.
+
+### Remote machines
+
+To have a second machine (e.g. Windows or macOS) report to the same dashboard:
+
+1. Copy `~/.config/party-line/ingest-token` from the dashboard host to the remote host's matching path. Preserve 0600 perms on POSIX.
+2. Generate a fresh machine ID on the remote host — **do not** reuse the dashboard's.
+3. Copy the appropriate emitter from `hooks/remote/` (POSIX or PowerShell) and register it in the remote host's Claude Code hooks config.
+4. Set `PARTY_LINE_INGEST` to `http://<dashboard-host>:3400/ingest`.
+
+Full guide: `hooks/remote/README.md`.
+
 ## Important: Wake-on-Message Setup
 
 This is the most common gotcha. There are two ways to load the party-line channel, and they behave differently:

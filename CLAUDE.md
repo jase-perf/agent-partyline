@@ -10,7 +10,7 @@ See `SPEC.md` for the full design spec, architecture, goals, current status, and
 
 ## Current Status
 
-Project is **functional and tested**. The following all work end-to-end:
+Project is **functional and tested**, including Mission Control observability (Phase 2). The following all work end-to-end:
 
 - UDP multicast transport (send-twice, join/leave, deduplication)
 - Dashboard — web UI at `localhost:3400` and CLI (`watch`, `send`, `request`, `sessions`)
@@ -18,6 +18,12 @@ Project is **functional and tested**. The following all work end-to-end:
 - Wake-on-message — incoming messages interrupt Claude when loaded with `--dangerously-load-development-channels server:party-line`
 - Auto-naming — session name read from parent process tree (`/proc` walk finds `--name` flag on the parent `claude` process)
 - Marketplace install — plugin published as `plugin:party-line@agent-partyline` (repo: https://github.com/Argonaut-Creations/agent-partyline)
+- Hook-based event ingest (`POST /ingest`) with shared-secret auth
+- SQLite persistence at `~/.config/party-line/dashboard.db` — schema versioning, migrations, 30-day retention
+- JSONL transcript observer — polls `~/.claude/projects/**/*.jsonl` + subagent transcripts
+- State aggregator — derives per-session, per-subagent, per-tool-call state from events
+- Mission Control dashboard UI — 4 tabs (Overview, Session Detail, Machines, History)
+- Remote host emitters (macOS/Linux/Windows) via `hooks/remote/`
 
 ## Tech Stack
 
@@ -39,16 +45,46 @@ Project is **functional and tested**. The following all work end-to-end:
 src/
   types.ts              — Shared types, constants, config defaults
   protocol.ts           — Envelope creation, serialization, deduplication
+  events.ts             — HookEvent type definitions and validation
+  machine-id.ts         — Stable machine ID read/write (~/.config/party-line/machine-id)
+  aggregator.ts         — Folds hook events into session/subagent/tool-call state
   transport/
     udp-multicast.ts    — UDP multicast adapter (send-twice, join/leave)
   presence.ts           — Heartbeat, announce, session timeout tracking
   server.ts             — MCP channel server (entry point for Claude Code)
+  ingest/
+    http.ts             — POST /ingest handler, envelope validation
+    auth.ts             — Shared-secret token management
+  observers/
+    jsonl.ts            — Polling tailer for ~/.claude/projects/**/*.jsonl + subagent transcripts
+  storage/
+    db.ts               — SQLite open, migration runner, schema versioning
+    schema.sql          — machines, sessions, events, tool_calls, subagents, metrics_daily
+    queries.ts          — Prepared statements and typed query helpers
+    metrics.ts          — Daily metrics rollup (sparkline data)
+    retention.ts        — 30-day event pruning on startup
 
 dashboard/
   monitor.ts            — Shared multicast listener (used by both web + CLI)
   serve.ts              — Web dashboard (HTTP + WebSocket bridge to browser)
   cli.ts                — CLI tool (watch, send, request, sessions, history)
-  index.html            — Dashboard web UI
+  index.html            — Dashboard web UI (shell; loads view fragments)
+  dashboard.js          — Router, view manager, WebSocket client
+  dashboard.css         — Dashboard styles
+  views/
+    overview.html       — Session cards with live state + sparklines
+    session-detail.html — Event timeline + subagent tree for one session
+    machines.html       — Per-host cards
+    history.html        — Filterable event feed
+
+hooks/
+  emit.sh               — Local hook emitter (POSTs to /ingest)
+  install.sh            — Merges hook entries into ~/.claude/settings.json
+  uninstall.sh          — Removes party-line hook entries
+  remote/
+    emit.sh             — POSIX emitter for remote hosts
+    emit.ps1            — PowerShell emitter for Windows
+    README.md           — Remote host setup guide
 
 bin/
   ccpl                  — Launcher script for party-line Claude Code sessions
@@ -75,6 +111,10 @@ claude --mcp-config /path/to/mcp-config.json --dangerously-load-development-chan
 
 # Note: --channels plugin:party-line@agent-partyline gives tools but NOT wake-on-message.
 # Wake requires the server: format with --dangerously-load-development-channels.
+
+# Install/uninstall hooks (captures events from every Claude Code session on this machine)
+bun run hooks:install
+bun run hooks:uninstall
 ```
 
 ## Conventions
@@ -85,6 +125,9 @@ claude --mcp-config /path/to/mcp-config.json --dangerously-load-development-chan
 - All messages go through protocol layer for consistent envelope format
 - Dashboard code in `dashboard/` imports from `src/` but `src/` never imports from `dashboard/`
 - Session names should be short, human-readable, lowercase (e.g., "discord", "research", "presentation")
+- SQLite schema changes always come with a migration entry in `src/storage/db.ts` and a bumped `SCHEMA_VERSION`
+- `fs.watch({ recursive: true })` is broken on Bun/Linux — observers use polling instead (confirmed via spike)
+- Hook emitters are fire-and-forget with a 1-2s curl timeout so they never block a Claude Code session
 
 ## Key Design Decisions
 
@@ -96,3 +139,5 @@ claude --mcp-config /path/to/mcp-config.json --dangerously-load-development-chan
 - Auto-naming via `/proc` process tree walk — reads `--name` flag from parent `claude` process, so `ccpl myname` just works without extra config
 - Wake-on-message requires `server:` format with `--dangerously-load-development-channels` — `plugin:` format delivers tools only, no channel interrupts
 - Dashboard sees its own messages via `includeSelf` transport flag — useful for testing send/receive without a second session
+- **Hooks over stdin injection** — originally researched ways to inject messages into running sessions (tmux paste-buffer, prompt queues). Landed on a passive-capture model: hooks emit events, the dashboard observes, no injection needed
+- **Session-name OR UUID lookups** — dashboard UI identifies sessions by name (from multicast presence), hook events are keyed by session UUID; backend queries accept either
