@@ -15,7 +15,9 @@
     "dashboard": "bun dashboard/serve.ts",
     "typecheck": "tsc --noEmit",
     "hooks:install": "bash hooks/install.sh",
-    "hooks:uninstall": "bash hooks/uninstall.sh"
+    "hooks:uninstall": "bash hooks/uninstall.sh",
+    "hooks:install-gemini": "bash hooks/gemini/install.sh",
+    "hooks:uninstall-gemini": "bash hooks/gemini/uninstall.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
