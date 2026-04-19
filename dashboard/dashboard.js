@@ -886,6 +886,7 @@ function renderAgentTree() {
     selectedAgentId = null;
     renderAgentTree();
     renderStream();
+    document.getElementById('detail-sidebar').classList.remove('open');
   });
   ul.appendChild(mainLi);
 
@@ -905,6 +906,7 @@ function renderAgentTree() {
       selectedAgentId = sa.agent_id;
       renderAgentTree();
       renderStream();
+      document.getElementById('detail-sidebar').classList.remove('open');
     });
     ul.appendChild(li);
   }
@@ -1263,6 +1265,10 @@ document.getElementById('history-subtabs').addEventListener('click', (e) => {
 document.getElementById('detail-back').addEventListener('click', function() {
   var tab = document.querySelector('button[data-view="switchboard"]');
   if (tab) tab.click();
+});
+
+document.getElementById('detail-drawer-toggle').addEventListener('click', () => {
+  document.getElementById('detail-sidebar').classList.toggle('open');
 });
 
 document.getElementById('detail-stream').addEventListener('click', (e) => {
