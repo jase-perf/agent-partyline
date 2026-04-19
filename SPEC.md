@@ -156,7 +156,74 @@ A lightweight web UI that joins the party line as a passive listener.
 - **MCP SDK**: `@modelcontextprotocol/sdk`
 - **Transport**: `node:dgram` (Bun-compatible, zero native deps)
 - **Dashboard**: `Bun.serve` (HTTP + WebSocket, zero deps)
-- **No database, no native bindings, no external dependencies beyond MCP SDK**
+- **Storage**: `bun:sqlite` (built-in, zero native deps) — used by Mission Control observability layer
+- **Hook emitters**: Bash (`curl` + `jq`) for local and remote hosts; PowerShell for Windows
+
+## Phase 2: Mission Control Observability
+
+Beyond the agent-to-agent channel, the dashboard also passively captures activity from every Claude Code session on the machine via hooks, regardless of whether the session is connected to the party-line channel.
+
+### Data flow
+
+1. A Claude Code session fires a hook (`PostToolUse`, `UserPromptSubmit`, `Stop`, `SubagentStart`/`Stop`, etc.).
+2. The hook script (`~/.config/party-line/emit.sh`) wraps the hook payload in an envelope with `machine_id`, `session_name`, `hook_event`, `ts`, and the original payload — then POSTs to the dashboard's `/ingest` endpoint with a shared-secret header.
+3. The dashboard validates the envelope, stores it in SQLite, and broadcasts a `session-update` message over WebSocket to connected browsers.
+4. In parallel, the dashboard polls `~/.claude/projects/**/*.jsonl` transcripts and `<session>/subagents/*.jsonl` files, re-emitting appended entries over WebSocket.
+5. The browser renders live session cards, event timelines, and subagent trees.
+
+### Ingest API
+
+`POST /ingest` — accepts a JSON envelope:
+
+```json
+{
+  "machine_id": "uuid",
+  "session_name": "discord",
+  "session_id": "uuid-from-claude-code",
+  "hook_event": "PostToolUse",
+  "ts": "2026-04-19T12:00:00.000Z",
+  "payload": {
+    "tool_name": "Bash",
+    "tool_input": { "...": "..." },
+    "tool_response": { "...": "..." }
+  },
+  "agent_id": "optional-subagent-id",
+  "agent_type": "optional-subagent-type"
+}
+```
+
+Headers: `X-Party-Line-Token: <token>` — must match `~/.config/party-line/ingest-token` on the dashboard host. Responses: `200 {ok:true}`, `400` (bad body), `401` (bad token), `405` (non-POST), `500` (storage error).
+
+### Storage
+
+SQLite at `~/.config/party-line/dashboard.db` (WAL mode). Tables: `machines`, `sessions`, `events`, `tool_calls`, `subagents`, `metrics_daily`. Schema versioned via `PRAGMA user_version`; migrations run on dashboard startup. Events older than 30 days are pruned automatically on startup. A daily metrics rollup table provides sparkline data without scanning raw events.
+
+### Remote hosts
+
+The `/ingest` endpoint is designed for localhost + LAN. A remote machine (e.g. a Windows dev box) can emit events to the dashboard over HTTP by copying the ingest token and setting `PARTY_LINE_INGEST` to the dashboard URL. Remote emitters live in `hooks/remote/`. Each remote host generates its own `machine_id` so events can be grouped by host.
+
+### Dashboard UI (4 tabs)
+
+- **Overview** — session cards with live state, current tool, subagent count, and 24h tool-call sparkline
+- **Session Detail** — event timeline for a single session, subagent tree with nested tool calls
+- **Machines** — one card per host reporting events, with last-seen and session counts
+- **History** — filterable event feed across all sessions and machines
+
+### Gemini CLI support
+
+Gemini CLI has a near-parity hooks system (configured in `~/.gemini/settings.json`) and auto-saves per-session transcripts at `~/.gemini/tmp/<project_hash>/chats/session-*.json` as a single JSON file (not JSONL). Mission Control supports both:
+
+- `bun run hooks:install-gemini` — registers hook entries in `~/.gemini/settings.json` pointing at a copy of our emit script at `~/.config/party-line/gemini-emit.sh`. Gemini event names are mapped to our `HookEventName` union inside the emitter (e.g. `BeforeTool` → `PreToolUse`, `AfterAgent` → `Stop`).
+- The dashboard also runs a `GeminiTranscriptObserver` that polls `~/.gemini/tmp/*/chats/session-*.json` and diffs `messages[]` on modification, so Gemini activity surfaces in the dashboard even without hooks registered.
+- Events from Gemini sessions carry `source: "gemini-cli"` in the `events` and `sessions` tables, and the dashboard renders a small `GEM` badge on Gemini session cards.
+
+**Known gap — Gemini sessions are read-only in Mission Control.** Gemini CLI has no equivalent of Claude Code's `channels` feature and no wake-on-message. A Gemini session cannot receive a message from the party-line bus, and it cannot respond to an `party_line_request`. If bidirectional support becomes necessary, options are (in order of complexity):
+
+1. **A2A (Agent-to-Agent) adapter.** Gemini supports calling remote A2A agents over HTTP. A side process could expose the party-line as an A2A agent a Gemini session calls explicitly. This is an outbound-from-Gemini pattern — Gemini queries, doesn't receive pushes.
+2. **ACP mode.** `gemini --acp` exposes the session over the Agent Client Protocol. Still an outbound pattern.
+3. **Stdin injection.** Write to the Gemini CLI's tmux pane via `tmux load-buffer` / `paste-buffer`. This was the approach we rejected for Claude Code; same drawbacks apply. Last resort.
+
+None of these are in scope for this plan. Mission Control observes Gemini; it does not talk to it.
 
 ## File Structure
 
@@ -202,7 +269,7 @@ Note: Claude Code does not expose `--name` via env var to MCP subprocesses. The 
 - **Two-session test**: open two terminals, each running Claude Code with `--name` and the party-line channel loaded. Send messages between them via the dashboard or MCP tools.
 - **Debug logging**: `PARTY_LINE_DEBUG=1` writes to stderr.
 
-## Current Status (2026-04-03)
+## Current Status (2026-04-20)
 
 **Fully working:**
 - All code compiles cleanly — TypeScript errors fixed (including @types/bun, tsconfig, TTL issue)
@@ -219,6 +286,14 @@ Note: Claude Code does not expose `--name` via env var to MCP subprocesses. The 
 - Local marketplace — set up for prompt-free plugin installation
 - Dashboard self-visibility — `includeSelf` flag on transport so dashboard sees its own messages
 - Wake-on-message — sessions wake from idle when receiving party-line messages
+- **Hook-based event ingest via `POST /ingest`** — shared-secret token auth, envelope validation
+- **SQLite persistence** — schema versioning + migrations via `PRAGMA user_version`
+- **JSONL transcript observer** — polling-based (Bun/Linux `fs.watch` recursive is broken); tails main session transcripts and `<session>/subagents/*.jsonl` files
+- **State aggregator** — folds hook events into per-session, per-subagent, per-tool-call state
+- **Mission Control dashboard UI** — 4-tab interface (Overview, Session Detail, Machines, History)
+- **Sparkline** — 24h tool-call count per session, derived from daily metrics rollup
+- **Retention + daily metrics rollup** — events pruned after 30 days on dashboard startup
+- **Remote host emitters** — macOS/Linux (`hooks/remote/emit.sh`) and Windows (`hooks/remote/emit.ps1`)
 
 **Known constraints:**
 - Must use `--dangerously-load-development-channels server:party-line` for full channel behavior (including wake-on-message notifications). Using `--channels plugin:name@marketplace` only registers tools, not notifications, for non-Anthropic-allowlisted plugins.
@@ -226,13 +301,13 @@ Note: Claude Code does not expose `--name` via env var to MCP subprocesses. The 
 - `.mcp.json` must use absolute paths (not `${CLAUDE_PLUGIN_ROOT}`) when loaded as `server:` format.
 - Plugin cache doesn't auto-update when source changes — bump version in `plugin.json` to force re-cache.
 - TTL must be 1 (not 0) — Bun's `setMulticastTTL(0)` throws `EINVAL`.
+- `fs.watch({ recursive: true })` is broken on Bun/Linux — JSONL observer uses polling instead.
 
-**Remaining work / future improvements (P2+):**
+**Remaining work / future improvements:**
 - Permission relay — forward tool approval prompts from headless sessions via party line
 - Structured message types — beyond plain text (status updates, task references, file paths)
 - Multi-address `to` field — array of session names for targeted broadcasts
 - Request/response timeout handling — currently fire-and-forget with no deadline enforcement
-- Unit and integration tests
 - Publishing to a real marketplace to avoid requiring `--dangerously-load-development-channels`
 
 ## Open Questions
@@ -242,6 +317,8 @@ Note: Claude Code does not expose `--name` via env var to MCP subprocesses. The 
 3. **Notifications for marketplace plugins**: Claude Code currently does not register channel notifications (`<channel>` delivery to Claude's context) for non-Anthropic-allowlisted plugins loaded via `--channels plugin:name@marketplace`. This is the key blocker for removing `--dangerously-load-development-channels`. No known workaround short of getting the plugin allowlisted by Anthropic or waiting for policy change.
 4. **Session resume by name**: `~/.claude/sessions/*.json` files contain name and sessionId. A future enhancement could let sessions find a previously-named session and resume it, rather than starting fresh with auto-naming.
 5. **Permission relay design**: forwarding tool approval prompts across sessions requires careful design — what's the right UX? Block the requesting session while waiting? Timeout and auto-deny? Currently unresolved.
+6. **Tool-call success detection** — `PostToolUse.tool_response` shape is tool-specific. Currently we heuristically detect failure via `tool_response.success === false`, `isError === true`, or `error` presence. A proper taxonomy per tool type would be more reliable.
+7. **Hook propagation into subagents** — not empirically verified whether `PreToolUse`/`PostToolUse` hooks configured in `~/.claude/settings.json` fire for tool calls originating in a subagent. We shipped with `SubagentStop` + subagent-transcript fallback (`<session>/subagents/agent-<id>.jsonl` tailing), but the parent-hook propagation path has **not been empirically confirmed**. If hooks do propagate into subagents, events will arrive with an `agent_id` field; if they don't, we rely entirely on the JSONL tail for subagent activity.
 
 ## Resolved Questions
 
