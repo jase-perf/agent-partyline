@@ -23,6 +23,7 @@ import { getMachineId } from '../src/machine-id.js'
 import { JsonlObserver } from '../src/observers/jsonl.js'
 import { GeminiTranscriptObserver } from '../src/observers/gemini-transcript.js'
 import { recentEvents } from '../src/storage/queries.js'
+import { buildTranscript } from '../src/transcript.js'
 import { pruneOldEvents } from '../src/storage/retention.js'
 import { rollupDailyMetrics, hourlyToolCalls } from '../src/storage/metrics.js'
 
@@ -232,6 +233,20 @@ const server = Bun.serve({
       const id = url.searchParams.get('session_id') ?? undefined
       const limit = parseInt(url.searchParams.get('limit') ?? '50', 10)
       return Response.json(recentEvents(db, { sessionId: id, limit }))
+    }
+
+    // REST API: JSONL transcript for a session or subagent
+    if (url.pathname === '/api/transcript') {
+      const sidParam = url.searchParams.get('session_id')
+      if (!sidParam) return Response.json({ error: 'session_id required' }, { status: 400 })
+      const resolved = aggregator.getSession(sidParam)
+      const sessionUuid = resolved?.session_id ?? sidParam
+      const agentId = url.searchParams.get('agent_id') ?? undefined
+      const limit = parseInt(url.searchParams.get('limit') ?? '200', 10)
+      const projectsRoot = join(process.env.HOME ?? '/home/claude', '.claude', 'projects')
+      return Response.json(buildTranscript({
+        projectsRoot, sessionId: sessionUuid, agentId, limit,
+      }))
     }
 
     // REST API: sparkline (hourly tool calls over last 24h for a session)
