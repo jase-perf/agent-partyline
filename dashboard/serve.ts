@@ -250,6 +250,19 @@ const server = Bun.serve({
       return Response.json(machines)
     }
 
+    // Static assets: vendor files
+    if (url.pathname.startsWith('/vendor/')) {
+      const name = url.pathname.slice('/vendor/'.length)
+      if (!/^[a-zA-Z0-9._-]+$/.test(name)) return new Response('Not Found', { status: 404 })
+      try {
+        const content = readFileSync(join(__dirname, 'vendor', name), 'utf-8')
+        const contentType = name.endsWith('.js') ? 'application/javascript' : 'text/plain'
+        return new Response(content, { headers: { 'Content-Type': contentType } })
+      } catch {
+        return new Response('Not Found', { status: 404 })
+      }
+    }
+
     // Static assets
     if (url.pathname === '/dashboard.css') {
       return new Response(dashboardCss, { headers: { 'Content-Type': 'text/css' } })
