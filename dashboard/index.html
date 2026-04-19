@@ -75,13 +75,7 @@
       <main class="detail-stream" id="detail-stream"></main>
     </div>
     <form class="detail-send" id="detail-send" onsubmit="event.preventDefault(); doDetailSend();">
-      <label>to</label>
-      <input id="detail-send-to" class="to">
-      <select id="detail-send-type">
-        <option value="message">message</option>
-        <option value="request">request</option>
-      </select>
-      <input id="detail-send-msg" class="msg" placeholder="Type a message..." autocomplete="off">
+      <input id="detail-send-msg" class="msg" placeholder="Message this session..." autocomplete="off">
       <button type="submit">Send</button>
     </form>
   </section>

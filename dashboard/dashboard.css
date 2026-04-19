@@ -327,6 +327,34 @@
   }
   .view[data-view="session-detail"].active { display: flex; }
 
+  section[data-view="session-detail"] {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+  section[data-view="session-detail"].view { padding: 0; }
+  section[data-view="session-detail"] .detail-header {
+    flex: 0 0 auto;
+  }
+  section[data-view="session-detail"] .detail-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+  section[data-view="session-detail"] .detail-stream {
+    overflow-y: auto;
+    height: 100%;
+    min-height: 0;
+  }
+  section[data-view="session-detail"] .detail-send {
+    flex: 0 0 auto;
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+  }
+
   .detail-header h2 { font-size: 15px; font-weight: 600; color: var(--text); }
   .detail-meta { display: flex; gap: 16px; font-size: 11px; color: var(--text-dim); margin-left: auto; }
   .detail-meta span:empty { display: none; }
@@ -693,6 +721,7 @@
 .detail-send label { font-size: 11px; color: var(--text-dim); }
 .detail-send input.to { width: 120px; }
 .detail-send input.msg { flex: 1; }
+.detail-send button { padding: 6px 14px; }
 .detail-send button {
   background: var(--accent);
   color: #000;

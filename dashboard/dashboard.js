@@ -836,7 +836,6 @@ async function loadSessionDetailView() {
   const sessionKey = selectedSessionId;
 
   document.getElementById('detail-name').textContent = sessionKey;
-  document.getElementById('detail-send-to').value = sessionKey;
 
   try {
     const r = await fetch('/api/session?id=' + encodeURIComponent(sessionKey));
@@ -1194,11 +1193,15 @@ function appendPartyLineEntry(wrap, e) {
 }
 
 function doDetailSend() {
-  const to = document.getElementById('detail-send-to').value.trim();
+  if (!selectedSessionId) return;
   const msg = document.getElementById('detail-send-msg').value.trim();
-  const type = document.getElementById('detail-send-type').value;
-  if (!to || !msg) return;
-  ws.send(JSON.stringify({ action: 'send', to, message: msg, type }));
+  if (!msg) return;
+  ws.send(JSON.stringify({
+    action: 'send',
+    to: selectedSessionId,
+    message: msg,
+    type: 'message',
+  }));
   document.getElementById('detail-send-msg').value = '';
   document.getElementById('detail-send-msg').focus();
 }
