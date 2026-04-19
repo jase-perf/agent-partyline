@@ -233,7 +233,12 @@ const server = Bun.serve({
       return handleIngest(req, {
         db,
         token,
-        onEvent: (ev) => aggregator.ingest(ev),
+        onEvent: (ev) => {
+          aggregator.ingest(ev)
+          // Broadcast the raw hook event so the History view can live-append.
+          const json = JSON.stringify({ type: 'hook-event', data: ev })
+          for (const ws of wsClients) ws.send(json)
+        },
       })
     }
 

@@ -231,6 +231,7 @@ function connect() {
     else if (data.type === 'overrides') { contextOverrides = data.data; updateSessions(lastSessions); }
     else if (data.type === 'session-update') { handleSessionUpdate(data.data); bumpUnread(data.data.name); }
     else if (data.type === 'jsonl') { handleJsonlEvent(data.data); bumpUnread(resolveNameFromJsonlPath(data.data.file_path) || data.data.session_id); }
+    else if (data.type === 'hook-event') handleHookEvent(data.data);
     else if (data.type === 'cross-call') handleCrossCall(data.data);
   };
 }
@@ -1371,6 +1372,24 @@ function addHookOption(hookEvent) {
   opt.value = hookEvent;
   opt.textContent = hookEvent;
   sel.appendChild(opt);
+}
+
+// Live-append a new hook event to the History → Events list when it arrives
+// via WebSocket. Noop until the list has been loaded at least once.
+function handleHookEvent(ev) {
+  if (!historyLoaded) return;
+  var list = document.getElementById('history-list');
+  if (!list) return;
+  // Skip the "No events" placeholder if present.
+  var placeholder = list.querySelector('.history-empty');
+  if (placeholder) placeholder.remove();
+  addHookOption(ev.hook_event);
+  historyEvents.unshift(ev);
+  var li = buildHistoryItem(ev);
+  if (list.firstChild) list.insertBefore(li, list.firstChild);
+  else list.appendChild(li);
+  // Respect current filters so an off-filter event stays hidden.
+  applyHistoryFilters();
 }
 
 function loadHistoryView() {
