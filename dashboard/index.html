@@ -58,18 +58,6 @@
           <span id="msgCount" style="margin-left:auto">0 messages</span>
         </div>
         <div class="feed" id="feed"></div>
-        <div class="send-bar">
-          <label>To:</label>
-          <input class="to" id="sendTo" placeholder="session or all" value="all">
-          <label>Type:</label>
-          <select id="sendType">
-            <option value="message">message</option>
-            <option value="request">request</option>
-            <option value="status">status</option>
-          </select>
-          <input class="msg" id="sendMsg" placeholder="Type a message..." autofocus>
-          <button id="sendBtn">Send</button>
-        </div>
       </div>
     </div>
   </div>
@@ -107,25 +95,36 @@
   </section>
 
 <section data-view="history" class="view" hidden>
-    <h2>History</h2>
-
-    <details class="history-bus" id="historyBus">
-      <summary>Party-line bus <span id="bus-count" class="bus-count">0</span></summary>
-      <div class="filters history-bus-filters">
-        <label><input type="checkbox" id="showHeartbeats2"> Show heartbeats</label>
-        <label><input type="checkbox" id="showAnnounce2" checked> Show announces</label>
-      </div>
-      <div class="feed" id="feed2"></div>
-    </details>
-
+  <nav class="subtabs" id="history-subtabs">
+    <button data-subtab="events" class="active">Events</button>
+    <button data-subtab="bus">Bus</button>
+  </nav>
+  <div class="subview" data-subview="events">
     <div class="history-controls">
       <input type="search" id="history-filter" placeholder="Filter events...">
-      <select id="history-hook-filter">
-        <option value="">All hooks</option>
-      </select>
+      <select id="history-hook-filter"><option value="">All hooks</option></select>
     </div>
     <ul id="history-list"></ul>
-  </section>
+  </div>
+  <div class="subview" data-subview="bus" hidden>
+    <div class="bus-feed-wrap">
+      <div class="feed-controls"><span id="busMsgCount">0 messages</span></div>
+      <div class="feed" id="busFeed"></div>
+      <form class="send-bar" id="busSend" onsubmit="event.preventDefault(); doBusSend();">
+        <label>To:</label>
+        <input class="to" id="busSendTo" placeholder="session or all" value="all">
+        <label>Type:</label>
+        <select id="busSendType">
+          <option value="message">message</option>
+          <option value="request">request</option>
+          <option value="status">status</option>
+        </select>
+        <input class="msg" id="busSendMsg" placeholder="Type a message...">
+        <button type="submit">Send</button>
+      </form>
+    </div>
+  </div>
+</section>
 
 </div>
 

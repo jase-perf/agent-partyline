@@ -1,14 +1,9 @@
-const feed = document.getElementById('feed');
+const busFeed = document.getElementById('busFeed');
 const sessionList = document.getElementById('sessionList');
 const connStatus = document.getElementById('connStatus');
-const msgCount = document.getElementById('msgCount');
 const showHeartbeats = document.getElementById('showHeartbeats');
 const showAnnounce = document.getElementById('showAnnounce');
 const autoscroll = document.getElementById('autoscroll');
-const sendTo = document.getElementById('sendTo');
-const sendType = document.getElementById('sendType');
-const sendMsg = document.getElementById('sendMsg');
-const sendBtn = document.getElementById('sendBtn');
 
 let totalMessages = 0;
 let ws;
@@ -443,10 +438,11 @@ function updateSessions(sessions) {
 
 function addMessage(msg) {
   totalMessages++;
-  msgCount.textContent = totalMessages + ' messages';
+  var busMsgCount = document.getElementById('busMsgCount');
+  if (busMsgCount) busMsgCount.textContent = totalMessages + ' messages';
 
-  if (msg.type === 'heartbeat' && !showHeartbeats.checked) return;
-  if (msg.type === 'announce' && !showAnnounce.checked) return;
+  if (msg.type === 'heartbeat' && showHeartbeats && !showHeartbeats.checked) return;
+  if (msg.type === 'announce' && showAnnounce && !showAnnounce.checked) return;
 
   var time = new Date(msg.ts).toLocaleTimeString();
 
@@ -493,22 +489,20 @@ function addMessage(msg) {
   bodySpan.textContent = msg.body;
   el.appendChild(bodySpan);
 
-  feed.appendChild(el);
+  busFeed.appendChild(el);
 
-  if (autoscroll.checked) {
-    feed.scrollTop = feed.scrollHeight;
+  if (autoscroll && autoscroll.checked) {
+    busFeed.scrollTop = busFeed.scrollHeight;
   }
 }
 
-function doSend() {
-  var to = sendTo.value.trim();
-  var message = sendMsg.value.trim();
-  var type = sendType.value;
-  if (!to || !message) return;
-
-  ws.send(JSON.stringify({ action: 'send', to: to, message: message, type: type }));
-  sendMsg.value = '';
-  sendMsg.focus();
+function doBusSend() {
+  const to = document.getElementById('busSendTo').value.trim();
+  const msg = document.getElementById('busSendMsg').value.trim();
+  const type = document.getElementById('busSendType').value;
+  if (!to || !msg) return;
+  ws.send(JSON.stringify({ action: 'send', to, message: msg, type }));
+  document.getElementById('busSendMsg').value = '';
 }
 
 function updateQuota(q) {
@@ -1378,51 +1372,21 @@ function loadHistoryView() {
   }
 }
 
-// Wire party-line bus in History view (mirrors addMessage to feed2)
+// Wire party-line bus in History > Bus sub-tab
 function addMessageToBus(msg) {
-  var feed2 = document.getElementById('feed2');
-  if (!feed2) return;
-  var showHB = document.getElementById('showHeartbeats2');
-  var showAnn = document.getElementById('showAnnounce2');
-  if (msg.type === 'heartbeat' && showHB && !showHB.checked) return;
-  if (msg.type === 'announce' && showAnn && !showAnn.checked) return;
-
-  var busCount = document.getElementById('bus-count');
-  if (busCount) busCount.textContent = String(parseInt(busCount.textContent || '0', 10) + 1);
-
-  var time = new Date(msg.ts).toLocaleTimeString();
-  var el = document.createElement('div');
-  el.className = 'msg';
-
-  var timeSpan = document.createElement('span');
-  timeSpan.className = 'time';
-  timeSpan.textContent = time;
-  el.appendChild(timeSpan);
-  el.appendChild(document.createTextNode(' '));
-
-  var typeSpan = document.createElement('span');
-  typeSpan.className = 'type type-' + msg.type;
-  typeSpan.textContent = msg.type;
-  el.appendChild(typeSpan);
-  el.appendChild(document.createTextNode(' '));
-
-  var routeSpan = document.createElement('span');
-  routeSpan.className = 'route';
-  routeSpan.textContent = msg.from + ' \u2192 ' + msg.to;
-  el.appendChild(routeSpan);
-  el.appendChild(document.createTextNode(' '));
-
-  var bodySpan = document.createElement('span');
-  bodySpan.className = 'body';
-  bodySpan.textContent = msg.body;
-  el.appendChild(bodySpan);
-
-  feed2.appendChild(el);
-  feed2.scrollTop = feed2.scrollHeight;
+  // addMessage already appends to busFeed and updates busMsgCount — no separate action needed.
 }
 
-sendBtn.addEventListener('click', doSend);
-sendMsg.addEventListener('keydown', function(e) { if (e.key === 'Enter') doSend(); });
+document.getElementById('history-subtabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-subtab]');
+  if (!btn) return;
+  document.querySelectorAll('#history-subtabs button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const sub = btn.dataset.subtab;
+  document.querySelectorAll('section[data-view="history"] .subview').forEach(v => {
+    v.hidden = v.dataset.subview !== sub;
+  });
+});
 
 document.getElementById('detail-back').addEventListener('click', function() {
   var tab = document.querySelector('button[data-view="switchboard"]');

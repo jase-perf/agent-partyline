@@ -724,4 +724,9 @@
 .pl-entry { border-left: 3px solid var(--accent); padding: 6px 10px; margin: 6px 0; background: #0d1117; font-size: 12px; cursor: pointer; }
 .pl-entry.pl-request  { border-left-color: var(--yellow); }
 .pl-entry.pl-response { border-left-color: var(--green); }
+
+.subtabs { display: flex; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.subtabs button { background: transparent; color: var(--text-dim); border: none; padding: 4px 12px; cursor: pointer; font-size: 12px; border-bottom: 2px solid transparent; }
+.subtabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+.subview { padding: 12px; }
 .pl-body { margin-top: 4px; color: var(--text-dim); font-size: 11px; }
