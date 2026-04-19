@@ -81,18 +81,22 @@ export function rollupDailyMetrics(db: Database, today: Date = new Date()): numb
   return rowsInserted
 }
 
-/** Hourly tool-call counts for the last 24 hours (live from events, no rollup). */
-export function hourlyToolCalls(db: Database, sessionId: string): number[] {
+/**
+ * Hourly tool-call counts for the last 24 hours (live from events, no rollup).
+ * Accepts either the session UUID or the session name.
+ */
+export function hourlyToolCalls(db: Database, sessionKey: string): number[] {
   const now = new Date()
   const buckets = new Array<number>(24).fill(0)
   const rows = db.query<
     { ts: string },
-    { $sid: string; $cutoff: string }
+    { $key: string; $cutoff: string }
   >(
     `SELECT ts FROM events
-     WHERE session_id = $sid AND hook_event = 'PostToolUse' AND ts >= $cutoff`,
+     WHERE (session_id = $key OR session_name = $key)
+       AND hook_event = 'PostToolUse' AND ts >= $cutoff`,
   ).all({
-    $sid: sessionId,
+    $key: sessionKey,
     $cutoff: new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(),
   })
   for (const { ts } of rows) {

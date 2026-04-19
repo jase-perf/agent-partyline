@@ -90,11 +90,21 @@ export function upsertSession(db: Database, s: UpsertSessionInput): void {
   })
 }
 
-export function sessionState(db: Database, sessionId: string): SessionRow | null {
-  const row = db
+/**
+ * Look up a session by either its UUID (session_id) or its human-readable name.
+ * When matching by name, returns the most recently seen row.
+ */
+export function sessionState(db: Database, key: string): SessionRow | null {
+  const byId = db
     .query<SessionRow, { $id: string }>('SELECT * FROM sessions WHERE session_id = $id')
-    .get({ $id: sessionId })
-  return row ?? null
+    .get({ $id: key })
+  if (byId) return byId
+  const byName = db
+    .query<SessionRow, { $name: string }>(
+      'SELECT * FROM sessions WHERE name = $name ORDER BY last_seen DESC LIMIT 1',
+    )
+    .get({ $name: key })
+  return byName ?? null
 }
 
 export function recentEvents(
@@ -102,13 +112,20 @@ export function recentEvents(
   opts: { sessionId?: string; limit?: number },
 ): EventRow[] {
   const limit = opts.limit ?? 50
+  // Match on either session_id (UUID) or session_name — the dashboard UI identifies
+  // sessions by name (from multicast presence) while ingested hook events are keyed
+  // by UUID. Accepting either lets us surface the timeline from a name-keyed card.
   const rows = opts.sessionId
     ? db
         .query<
           Omit<EventRow, 'payload'> & { payload_json: string },
-          { $id: string; $limit: number }
-        >('SELECT * FROM events WHERE session_id = $id ORDER BY ts DESC LIMIT $limit')
-        .all({ $id: opts.sessionId, $limit: limit })
+          { $key: string; $limit: number }
+        >(
+          `SELECT * FROM events
+           WHERE session_id = $key OR session_name = $key
+           ORDER BY ts DESC LIMIT $limit`,
+        )
+        .all({ $key: opts.sessionId, $limit: limit })
     : db
         .query<Omit<EventRow, 'payload'> & { payload_json: string }, { $limit: number }>(
           'SELECT * FROM events ORDER BY ts DESC LIMIT $limit',

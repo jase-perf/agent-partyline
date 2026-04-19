@@ -93,19 +93,29 @@ export class Aggregator {
     }
   }
 
-  getSession(id: string): SessionRow | null {
-    const row = this.db
+  /** Look up a session by UUID or by human-readable name. */
+  getSession(key: string): SessionRow | null {
+    const byId = this.db
       .query<SessionRow, { $id: string }>('SELECT * FROM sessions WHERE session_id=$id')
-      .get({ $id: id })
-    return row ?? null
+      .get({ $id: key })
+    if (byId) return byId
+    const byName = this.db
+      .query<SessionRow, { $name: string }>(
+        'SELECT * FROM sessions WHERE name=$name ORDER BY last_seen DESC LIMIT 1',
+      )
+      .get({ $name: key })
+    return byName ?? null
   }
 
-  getSubagents(sessionId: string): SubagentRow[] {
+  /** Accept either the session UUID or the session name. */
+  getSubagents(sessionKey: string): SubagentRow[] {
+    const resolved = this.getSession(sessionKey)
+    const uuid = resolved?.session_id ?? sessionKey
     return this.db
       .query<SubagentRow, { $s: string }>(
         'SELECT * FROM subagents WHERE session_id=$s ORDER BY started_at DESC',
       )
-      .all({ $s: sessionId })
+      .all({ $s: uuid })
   }
 
   listSessions(): SessionRow[] {
