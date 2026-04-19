@@ -13,7 +13,9 @@
     "start": "bun install --no-summary && bun src/server.ts",
     "dev": "PARTY_LINE_DEBUG=1 bun --watch src/server.ts",
     "dashboard": "bun dashboard/serve.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "hooks:install": "bash hooks/install.sh",
+    "hooks:uninstall": "bash hooks/uninstall.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
