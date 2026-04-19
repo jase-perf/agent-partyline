@@ -104,6 +104,24 @@ monitor.onMessage((envelope) => {
   for (const ws of wsClients) {
     ws.send(json)
   }
+
+  if (
+    envelope.from !== envelope.to &&
+    envelope.to !== 'all' &&
+    (envelope.type === 'message' || envelope.type === 'request' || envelope.type === 'response')
+  ) {
+    const crossJson = JSON.stringify({
+      type: 'cross-call',
+      data: {
+        from: envelope.from,
+        to: envelope.to,
+        envelope_type: envelope.type,
+        message_id: envelope.id,
+        ts: envelope.ts,
+      },
+    })
+    for (const ws of wsClients) ws.send(crossJson)
+  }
 })
 
 // Periodic session list push
