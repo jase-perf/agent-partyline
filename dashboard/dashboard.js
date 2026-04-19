@@ -16,6 +16,7 @@ let contextOverrides = {};
 let lastSessions = [];
 let currentView = 'overview';
 let selectedSessionId = null;
+var historyBuffer = [];
 
 // --- Tab router ---
 
@@ -217,6 +218,7 @@ document.addEventListener('keydown', function(e) {
 
 function updateSessions(sessions) {
   lastSessions = sessions;
+  updateOverviewGrid(sessions);
   if (sessions.length === 0) {
     sessionList.textContent = 'no sessions';
     return;
@@ -450,12 +452,160 @@ function updateQuota(q) {
   }
 }
 
+// --- Overview grid: session cards ---
+
+function stateClass(state) {
+  if (state === 'working') return 'state-working';
+  if (state === 'idle') return 'state-idle';
+  if (state === 'errored') return 'state-errored';
+  return 'state-ended';
+}
+
+function buildCardContents(s) {
+  var st = (s.metadata && s.metadata.status) ? s.metadata.status : null;
+  var state = (st && st.state) ? st.state : 'ended';
+
+  // Header
+  var header = document.createElement('div');
+  header.className = 'card-header';
+
+  var pill = document.createElement('span');
+  pill.className = 'state-pill ' + stateClass(state);
+  pill.textContent = state;
+  header.appendChild(pill);
+
+  var nameEl = document.createElement('span');
+  nameEl.className = 'session-name';
+  nameEl.textContent = s.name;
+  header.appendChild(nameEl);
+
+  // Body
+  var body = document.createElement('div');
+  body.className = 'card-body';
+
+  if (st && st.state === 'working' && st.currentTool) {
+    var toolEl = document.createElement('div');
+    toolEl.className = 'card-tool';
+    toolEl.appendChild(document.createTextNode('running '));
+    var codeEl = document.createElement('code');
+    codeEl.textContent = st.currentTool;
+    toolEl.appendChild(codeEl);
+    body.appendChild(toolEl);
+  }
+
+  if (st && st.lastText) {
+    var lastEl = document.createElement('div');
+    lastEl.className = 'card-last-text';
+    lastEl.textContent = '\u201c' + st.lastText.slice(0, 60) + '\u201d';
+    body.appendChild(lastEl);
+  }
+
+  var metaEl = document.createElement('div');
+  metaEl.className = 'card-meta';
+
+  if (st && st.contextTokens !== null && st.contextTokens !== undefined) {
+    var effLimit = getEffectiveContextLimit(s.name, st);
+    var pct = Math.round((st.contextTokens / effLimit) * 100);
+    var ctxSpan = document.createElement('span');
+    ctxSpan.className = 'ctx';
+    ctxSpan.textContent = 'ctx ' + formatTokens(st.contextTokens) + ' (' + pct + '%)';
+    metaEl.appendChild(ctxSpan);
+  }
+
+  var subsSpan = document.createElement('span');
+  subsSpan.className = 'subs';
+  subsSpan.textContent = '0 subagents';
+  metaEl.appendChild(subsSpan);
+
+  body.appendChild(metaEl);
+
+  return { header: header, body: body };
+}
+
+function buildSessionCard(s) {
+  var card = document.createElement('div');
+  card.className = 'session-card';
+  // Use session name as ID key (party-line sessions don't have DB IDs)
+  card.dataset.sessionId = s.name;
+
+  var parts = buildCardContents(s);
+  card.appendChild(parts.header);
+  card.appendChild(parts.body);
+
+  card.addEventListener('click', function() {
+    selectedSessionId = s.name;
+    // Select visual state
+    document.querySelectorAll('.session-card').forEach(function(c) { c.classList.remove('selected'); });
+    card.classList.add('selected');
+    // Enable and switch to session-detail tab
+    var detailBtn = document.querySelector('.tabs button[data-view="session-detail"]');
+    if (detailBtn) {
+      detailBtn.disabled = false;
+      document.querySelectorAll('.tabs button').forEach(function(b) { b.classList.remove('active'); });
+      detailBtn.classList.add('active');
+    }
+    renderView('session-detail');
+  });
+
+  return card;
+}
+
+function updateOverviewGrid(sessions) {
+  var grid = document.getElementById('overview-grid');
+  if (!grid) return;
+
+  sessions.forEach(function(s) {
+    var existing = grid.querySelector('[data-session-id="' + CSS.escape(s.name) + '"]');
+    if (existing) {
+      // Update in place
+      existing.textContent = '';
+      var parts = buildCardContents(s);
+      existing.appendChild(parts.header);
+      existing.appendChild(parts.body);
+    } else {
+      grid.appendChild(buildSessionCard(s));
+    }
+  });
+
+  // Remove cards for sessions that are no longer present
+  var sessionNames = sessions.map(function(s) { return s.name; });
+  grid.querySelectorAll('.session-card').forEach(function(card) {
+    if (sessionNames.indexOf(card.dataset.sessionId) === -1) {
+      card.remove();
+    }
+  });
+}
+
 // --- WebSocket event handlers for new message types ---
 
-function handleSessionUpdate(session) { /* Step 3/4 fills this in */ }
-function handleJsonlEvent(event) { /* Step 4/6 fills this in */ }
+function handleSessionUpdate(session) {
+  // Update the card in the overview grid if it exists
+  // session here is an aggregated DB session with session_id, not the heartbeat session
+  if (!session || !session.session_id) return;
 
-// --- Placeholder view loaders (filled in later steps) ---
+  // Update detail view header if we're viewing this session
+  if (currentView === 'session-detail' && selectedSessionId === session.session_id) {
+    updateDetailHeader(session);
+  }
+}
+
+function handleJsonlEvent(event) {
+  // Append to timeline if we're viewing the relevant session
+  if (currentView === 'session-detail' && selectedSessionId && event) {
+    if (event.session_id === selectedSessionId || event.session_name === selectedSessionId) {
+      prependTimelineEvent(event);
+    }
+  }
+  // Also buffer for history view
+  historyBuffer.push(event);
+}
+
+// --- Stub functions filled in later steps ---
+
+function updateDetailHeader(session) { /* Step 4 */ }
+function prependTimelineEvent(event) { /* Step 4 */ }
+
+// --- View loaders ---
 
 function loadMachinesView() { /* Step 5 */ }
 function loadHistoryView() { /* Step 6 */ }

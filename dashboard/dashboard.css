@@ -245,6 +245,58 @@
   }
   .send-bar button:hover { opacity: 0.9; }
 
+  /* Overview grid */
+  #overview-grid {
+    padding: 12px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+    overflow-y: auto;
+    max-height: 300px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  #overview-grid:empty { display: none; }
+
+  /* Session cards */
+  .session-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .session-card:hover { border-color: var(--accent); }
+  .session-card.selected { border-color: var(--accent); background: #1c2230; }
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .card-header .session-name { font-weight: 600; font-size: 13px; color: var(--text); }
+  .card-body { font-size: 11px; color: var(--text-dim); }
+  .card-tool { margin-bottom: 2px; }
+  .card-tool code { color: var(--accent); background: rgba(88,166,255,0.1); padding: 1px 4px; border-radius: 3px; }
+  .card-last-text { font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; max-width: 100%; }
+  .card-meta { display: flex; gap: 10px; font-size: 10px; color: var(--text-dim); }
+
+  /* State pills */
+  .state-pill {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  .state-working { background: rgba(210,153,34,0.2); color: var(--yellow); }
+  .state-idle    { background: rgba(63,185,80,0.2);  color: var(--green); }
+  .state-ended   { background: rgba(139,148,158,0.15); color: var(--text-dim); }
+  .state-errored { background: rgba(248,81,73,0.2);  color: var(--red); }
+
   /* Tab bar */
   .tabs {
     display: flex;
