@@ -281,6 +281,8 @@
   .card-tool code { color: var(--accent); background: rgba(88,166,255,0.1); padding: 1px 4px; border-radius: 3px; }
   .card-last-text { font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; max-width: 100%; }
   .card-meta { display: flex; gap: 10px; font-size: 10px; color: var(--text-dim); }
+  .card-sparkline { margin-top: 4px; color: var(--text-dim); }
+  .card-sparkline .sparkline { display: block; }
 
   /* State pills */
   .state-pill {

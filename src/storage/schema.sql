@@ -2,7 +2,7 @@ PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
 -- Schema version — bump when migrations are added. Handled by db.ts.
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 
 CREATE TABLE IF NOT EXISTS machines (
   id TEXT PRIMARY KEY,
@@ -72,3 +72,13 @@ CREATE TABLE IF NOT EXISTS subagents (
   status TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_subagents_session_started ON subagents(session_id, started_at);
+
+CREATE TABLE IF NOT EXISTS metrics_daily (
+  day TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  tool_calls INTEGER NOT NULL DEFAULT 0,
+  subagents_spawned INTEGER NOT NULL DEFAULT 0,
+  turns INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_metrics_day ON metrics_daily(day);

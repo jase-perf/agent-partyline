@@ -6,12 +6,23 @@ import { fileURLToPath } from 'url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SCHEMA_PATH = join(__dirname, 'schema.sql')
 
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 type Migration = (db: Database) => void
 const MIGRATIONS: Record<number, Migration> = {
-  // Example future entry:
-  // 2: (db) => { db.exec("ALTER TABLE events ADD COLUMN source TEXT DEFAULT 'claude-code'") },
+  2: (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS metrics_daily (
+        day TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        tool_calls INTEGER NOT NULL DEFAULT 0,
+        subagents_spawned INTEGER NOT NULL DEFAULT 0,
+        turns INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (day, session_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_metrics_day ON metrics_daily(day);
+    `)
+  },
 }
 
 export function openDb(path: string): Database {

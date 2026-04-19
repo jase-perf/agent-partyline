@@ -2,6 +2,7 @@ import { describe, expect, test, beforeEach } from 'bun:test'
 import { rmSync } from 'fs'
 import { openDb, SCHEMA_VERSION } from '../src/storage/db.js'
 import { insertEvent, upsertSession, recentEvents, sessionState } from '../src/storage/queries.js'
+import { pruneOldEvents } from '../src/storage/retention.js'
 
 const TEST_PATH = '/tmp/party-line-test.db'
 
@@ -34,7 +35,7 @@ describe('storage', () => {
     const db = openDb(TEST_PATH)
     const row = db.query<{ user_version: number }, []>('PRAGMA user_version').get()
     expect(row?.user_version).toBe(SCHEMA_VERSION)
-    expect(row?.user_version).toBe(1)
+    expect(row?.user_version).toBe(2)
     db.close()
   })
 
@@ -87,6 +88,29 @@ describe('storage', () => {
     expect(row?.cwd).toBe('/home/x')
     expect(row?.model).toBe('sonnet')
     expect(row?.last_seen).toBe('t2')
+    db.close()
+  })
+
+  test('pruneOldEvents deletes old events', () => {
+    const db = openDb(TEST_PATH)
+    const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString()
+    const recent = new Date().toISOString()
+    insertEvent(db, { machine_id: 'm', session_name: 'x', session_id: 's1', hook_event: 'Stop', ts: old, payload: {} })
+    insertEvent(db, { machine_id: 'm', session_name: 'x', session_id: 's1', hook_event: 'Stop', ts: recent, payload: {} })
+    const deleted = pruneOldEvents(db, 30)
+    expect(deleted).toBe(1)
+    const remaining = recentEvents(db, { limit: 10 })
+    expect(remaining.length).toBe(1)
+    db.close()
+  })
+
+  test('openDb creates metrics_daily table via migration', () => {
+    const db = openDb(TEST_PATH)
+    const tables = db
+      .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table'")
+      .all()
+      .map((r) => r.name)
+    expect(tables).toContain('metrics_daily')
     db.close()
   })
 })

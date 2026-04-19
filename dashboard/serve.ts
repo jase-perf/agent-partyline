@@ -22,6 +22,8 @@ import { loadOrCreateToken } from '../src/ingest/auth.js'
 import { getMachineId } from '../src/machine-id.js'
 import { JsonlObserver } from '../src/observers/jsonl.js'
 import { recentEvents } from '../src/storage/queries.js'
+import { pruneOldEvents } from '../src/storage/retention.js'
+import { rollupDailyMetrics, hourlyToolCalls } from '../src/storage/metrics.js'
 
 // --- Args ---
 
@@ -223,6 +225,12 @@ const server = Bun.serve({
       return Response.json(recentEvents(db, { sessionId: id, limit }))
     }
 
+    // REST API: sparkline (hourly tool calls over last 24h for a session)
+    if (url.pathname === '/api/sparkline' && url.searchParams.get('session_id')) {
+      const id = url.searchParams.get('session_id')!
+      return Response.json({ buckets: hourlyToolCalls(db, id) })
+    }
+
     // REST API: machines
     if (url.pathname === '/api/machines') {
       const machines = db
@@ -295,6 +303,17 @@ async function main(): Promise<void> {
   await monitor.start()
   await jsonlObserver.start()
   startQuotaPoller(300_000) // poll every 5 minutes
+
+  // Retention + daily metrics rollup
+  try {
+    const deleted = pruneOldEvents(db, 30)
+    if (deleted > 0) console.log(`  Retention: pruned ${deleted} old events`)
+    const rolled = rollupDailyMetrics(db)
+    if (rolled > 0) console.log(`  Metrics:   rolled up ${rolled} daily rows`)
+  } catch (err) {
+    console.error('  Warning: retention/rollup failed:', err)
+  }
+
   console.log(`Party Line Dashboard`)
   console.log(`  Web UI:   http://localhost:${PORT}`)
   console.log(`  Ingest:   http://localhost:${PORT}/ingest`)

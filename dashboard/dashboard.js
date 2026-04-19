@@ -452,6 +452,42 @@ function updateQuota(q) {
   }
 }
 
+// --- Sparkline ---
+
+// Cache: sessionId -> { buckets: number[], ts: number }
+var sparklineCache = {};
+
+function renderSparkline(buckets) {
+  if (!buckets || buckets.length === 0) return '';
+  var max = Math.max(1, Math.max.apply(null, buckets));
+  var w = 60, h = 14;
+  var step = w / buckets.length;
+  var points = buckets.map(function(v, i) {
+    var x = i * step;
+    var y = h - (v / max) * h;
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+  return '<svg class="sparkline" viewBox="0 0 ' + w + ' ' + h + '" width="' + w + '" height="' + h + '">' +
+    '<polyline points="' + points + '" fill="none" stroke="currentColor" stroke-width="1"></polyline>' +
+    '</svg>';
+}
+
+function fetchAndRenderSparkline(sessionId, containerEl) {
+  var now = Date.now();
+  var cached = sparklineCache[sessionId];
+  if (cached && (now - cached.ts) < 60000) {
+    containerEl.innerHTML = renderSparkline(cached.buckets);
+    return;
+  }
+  fetch('/api/sparkline?session_id=' + encodeURIComponent(sessionId))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      sparklineCache[sessionId] = { buckets: data.buckets, ts: Date.now() };
+      containerEl.innerHTML = renderSparkline(data.buckets);
+    })
+    .catch(function() { /* silently fail — sparkline is non-critical */ });
+}
+
 // --- Overview grid: session cards ---
 
 function stateClass(state) {
@@ -519,7 +555,12 @@ function buildCardContents(s) {
 
   body.appendChild(metaEl);
 
-  return { header: header, body: body };
+  // Sparkline slot — populated async after card is in the DOM
+  var sparklineSlot = document.createElement('div');
+  sparklineSlot.className = 'card-sparkline';
+  body.appendChild(sparklineSlot);
+
+  return { header: header, body: body, sparklineSlot: sparklineSlot };
 }
 
 function buildSessionCard(s) {
@@ -531,6 +572,11 @@ function buildSessionCard(s) {
   var parts = buildCardContents(s);
   card.appendChild(parts.header);
   card.appendChild(parts.body);
+
+  // Fetch sparkline async — uses session name as session_id proxy for party-line sessions
+  // For DB sessions (with status), use session_id if available
+  var sparkId = (s.metadata && s.metadata.status && s.metadata.status.sessionId) ? s.metadata.status.sessionId : s.name;
+  fetchAndRenderSparkline(sparkId, parts.sparklineSlot);
 
   card.addEventListener('click', function() {
     selectedSessionId = s.name;
@@ -562,6 +608,9 @@ function updateOverviewGrid(sessions) {
       var parts = buildCardContents(s);
       existing.appendChild(parts.header);
       existing.appendChild(parts.body);
+      // Re-attach sparkline (uses cache — won't re-fetch if within 60s)
+      var sparkId = (s.metadata && s.metadata.status && s.metadata.status.sessionId) ? s.metadata.status.sessionId : s.name;
+      fetchAndRenderSparkline(sparkId, parts.sparklineSlot);
     } else {
       grid.appendChild(buildSessionCard(s));
     }
