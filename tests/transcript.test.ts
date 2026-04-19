@@ -129,4 +129,35 @@ describe('buildTranscript', () => {
     const entries = buildTranscript({ projectsRoot, sessionId: 'missing', limit: 100 })
     expect(entries).toEqual([])
   })
+
+  test('interleaves party-line send/receive entries when envelopes provided', () => {
+    const cwdSlug = '-home-x'
+    const sessionId = 'sess-1'
+    const cwdDir = join(projectsRoot, cwdSlug)
+    mkdirSync(cwdDir)
+    writeFileSync(join(cwdDir, `${sessionId}.jsonl`),
+      JSON.stringify({
+        type: 'assistant',
+        uuid: 'a1',
+        timestamp: '2026-04-20T00:00:02Z',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
+      }) + '\n',
+    )
+
+    const entries = buildTranscript({
+      projectsRoot,
+      sessionId,
+      sessionName: 'work',
+      limit: 100,
+      envelopes: [
+        { id: 'e1', from: 'work', to: 'research', type: 'request',
+          body: 'find thing', ts: '2026-04-20T00:00:03Z', callback_id: 'cb1' },
+        { id: 'e2', from: 'research', to: 'work', type: 'response',
+          body: 'found', ts: '2026-04-20T00:00:05Z', response_to: 'cb1' },
+      ],
+    })
+
+    expect(entries.some((e) => e.type === 'party-line-send' && e.other_session === 'research')).toBe(true)
+    expect(entries.some((e) => e.type === 'party-line-receive' && e.other_session === 'research')).toBe(true)
+  })
 })

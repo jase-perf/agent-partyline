@@ -259,11 +259,18 @@ const server = Bun.serve({
       if (!sidParam) return Response.json({ error: 'session_id required' }, { status: 400 })
       const resolved = aggregator.getSession(sidParam)
       const sessionUuid = resolved?.session_id ?? sidParam
+      const sessionName = resolved?.name ?? sidParam
       const agentId = url.searchParams.get('agent_id') ?? undefined
       const limit = parseInt(url.searchParams.get('limit') ?? '200', 10)
       const projectsRoot = join(process.env.HOME ?? '/home/claude', '.claude', 'projects')
+      const envelopes = monitor.getHistory({ limit: 500, excludeHeartbeats: true })
       return Response.json(buildTranscript({
-        projectsRoot, sessionId: sessionUuid, agentId, limit,
+        projectsRoot,
+        sessionId: sessionUuid,
+        sessionName,
+        agentId,
+        limit,
+        envelopes,
       }))
     }
 

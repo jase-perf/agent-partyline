@@ -37,11 +37,24 @@ export interface TranscriptEntry {
   envelope_type?: 'message' | 'request' | 'response'
 }
 
+export interface PartyLineEnvelope {
+  id: string
+  from: string
+  to: string
+  type: 'message' | 'request' | 'response' | string
+  body: string
+  ts: string
+  callback_id?: string | null
+  response_to?: string | null
+}
+
 export interface BuildTranscriptOptions {
   projectsRoot: string
   sessionId: string
   agentId?: string
   limit: number
+  sessionName?: string
+  envelopes?: PartyLineEnvelope[]
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +310,36 @@ export function buildTranscript(opts: BuildTranscriptOptions): TranscriptEntry[]
   for (const rec of records) {
     const newEntries = recordToEntries(rec, pendingToolUses, projectsRoot, cwdSlug, sessionId)
     entries.push(...newEntries)
+  }
+
+  if (opts.envelopes && opts.sessionName) {
+    const name = opts.sessionName
+    for (const env of opts.envelopes) {
+      if (env.from === name) {
+        entries.push({
+          uuid: env.id,
+          ts: env.ts,
+          type: 'party-line-send',
+          envelope_id: env.id,
+          other_session: env.to,
+          body: env.body,
+          callback_id: env.callback_id ?? undefined,
+          envelope_type: (env.type as 'message' | 'request' | 'response'),
+        })
+      } else if (env.to === name || env.to.split(',').map((s) => s.trim()).includes(name)) {
+        entries.push({
+          uuid: env.id,
+          ts: env.ts,
+          type: 'party-line-receive',
+          envelope_id: env.id,
+          other_session: env.from,
+          body: env.body,
+          callback_id: env.callback_id ?? undefined,
+          envelope_type: (env.type as 'message' | 'request' | 'response'),
+        })
+      }
+    }
+    entries.sort((a, b) => a.ts.localeCompare(b.ts))
   }
 
   return entries.slice(-limit)
