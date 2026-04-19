@@ -12,15 +12,20 @@
     --cyan: #39c5cf;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
   body {
     font-family: 'Atkinson Hyperlegible Next', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     font-size: 13px;
     background: var(--bg);
     color: var(--text);
+    /* Dynamic viewport height: tracks mobile browser chrome showing/hiding. */
     height: 100vh;
+    height: 100dvh;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    /* Prevent scroll chaining from inner scroll containers to the page. */
+    overscroll-behavior: none;
   }
   code, pre, .code-block, .entry-body pre, .entry-body code,
   .tool-use pre, .tool-input pre, .tool-response pre,
@@ -354,6 +359,9 @@
     overflow-y: auto;
     height: 100%;
     min-height: 0;
+    /* Keep touch scrolling inside the stream; don't chain to the page. */
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
   }
   section[data-view="session-detail"] .detail-send {
     flex: 0 0 auto;
