@@ -69,6 +69,8 @@ fetch('/api/self')
   .then(data => { localMachineId = data.machine_id; })
   .catch(() => {});
 let selectedSessionId = null;
+let selectedAgentId = null;
+let currentSessionSubagents = [];
 var historyBuffer = [];
 
 // --- Tab router ---
@@ -965,11 +967,87 @@ function prependTimelineEvent(event) {
   timeline.insertBefore(buildTimelineItem(event), timeline.firstChild);
 }
 
-function loadSessionDetailView() {
+async function loadSessionDetailView() {
   if (!selectedSessionId) return;
-  document.getElementById('detail-name').textContent = selectedSessionId;
-  document.getElementById('detail-send-to').value = selectedSessionId;
-  // Real loader arrives in SB-10
+  const sessionKey = selectedSessionId;
+
+  document.getElementById('detail-name').textContent = sessionKey;
+  document.getElementById('detail-send-to').value = sessionKey;
+
+  try {
+    const r = await fetch('/api/session?id=' + encodeURIComponent(sessionKey));
+    const data = await r.json();
+    currentSessionSubagents = data.subagents || [];
+    if (data.session) renderDetailHeader(data.session);
+    renderAgentTree();
+  } catch (e) {
+    console.warn('session fetch failed', e);
+  }
+
+  selectedAgentId = null;
+  await renderStream();
+}
+
+function renderDetailHeader(session) {
+  const pill = document.getElementById('detail-state');
+  pill.className = 'state-pill state-' + (session.state || 'idle');
+  pill.textContent = (session.state || 'idle').toUpperCase();
+  document.getElementById('detail-cwd').textContent = session.cwd || '';
+  document.getElementById('detail-model').textContent = session.model ? session.model.replace('claude-', '') : '';
+  document.getElementById('detail-ctx').textContent = session.context_tokens
+    ? 'ctx ' + formatTokens(session.context_tokens)
+    : '';
+  const hostEl = document.getElementById('detail-host');
+  if (session.machine_id && localMachineId && session.machine_id !== localMachineId) {
+    hostEl.textContent = 'host: ' + session.machine_id.slice(0, 8);
+  } else {
+    hostEl.textContent = '';
+  }
+}
+
+function renderAgentTree() {
+  const ul = document.getElementById('detail-tree');
+  ul.textContent = '';
+
+  const mainLi = document.createElement('li');
+  mainLi.dataset.agentId = '';
+  mainLi.textContent = '▸ main';
+  if (!selectedAgentId) mainLi.classList.add('active');
+  mainLi.addEventListener('click', () => {
+    selectedAgentId = null;
+    renderAgentTree();
+    renderStream();
+  });
+  ul.appendChild(mainLi);
+
+  for (const sa of currentSessionSubagents) {
+    const li = document.createElement('li');
+    li.dataset.agentId = sa.agent_id;
+    li.style.paddingLeft = '16px';
+    const status = sa.status || 'running';
+    const label = sa.agent_type || sa.agent_id.slice(0, 6);
+    const labelNode = document.createTextNode('└ ' + label + ' ');
+    const dot = document.createElement('span');
+    dot.className = 'dot ' + status;
+    li.appendChild(labelNode);
+    li.appendChild(dot);
+    if (selectedAgentId === sa.agent_id) li.classList.add('active');
+    li.addEventListener('click', () => {
+      selectedAgentId = sa.agent_id;
+      renderAgentTree();
+      renderStream();
+    });
+    ul.appendChild(li);
+  }
+}
+
+async function renderStream() {
+  const root = document.getElementById('detail-stream');
+  root.textContent = '';
+  const p = document.createElement('p');
+  p.style.color = 'var(--text-dim)';
+  p.textContent = 'Stream renderer arrives in SB-11.';
+  root.appendChild(p);
 }
 
 function doDetailSend() {
