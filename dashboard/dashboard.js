@@ -1048,15 +1048,37 @@ function buildAgentLi(sa) {
   return li;
 }
 
-async function renderStream() {
-  const root = document.getElementById('detail-stream');
-  root.replaceChildren();
-  const loading = document.createElement('p');
-  loading.style.color = 'var(--text-dim)';
-  loading.textContent = 'Loading...';
-  root.appendChild(loading);
+// Tracks UUIDs already rendered for the currently-displayed stream, so updates
+// only append new entries instead of wiping the DOM (avoids flash + scroll jump).
+let renderedEntryKeys = new Set();
+let renderedStreamKey = null;  // sessionId + '|' + (agentId || '') — resets on switch
 
-  if (!selectedSessionId) return;
+function isNearBottom(el) {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+}
+
+async function renderStream(opts) {
+  const root = document.getElementById('detail-stream');
+  if (!root) return;
+  if (!selectedSessionId) { root.replaceChildren(); return; }
+
+  const streamKey = selectedSessionId + '|' + (selectedAgentId || '');
+  const isNewStream = streamKey !== renderedStreamKey;
+  const force = opts && opts.force;
+
+  if (isNewStream || force) {
+    // Full rebuild path — show loading + replace everything.
+    root.replaceChildren();
+    renderedEntryKeys = new Set();
+    renderedStreamKey = streamKey;
+    const loading = document.createElement('p');
+    loading.style.color = 'var(--text-dim)';
+    loading.textContent = 'Loading...';
+    root.appendChild(loading);
+  }
+
+  const wasNearBottom = !isNewStream && isNearBottom(root);
+
   const qs = 'session_id=' + encodeURIComponent(selectedSessionId)
     + (selectedAgentId ? '&agent_id=' + encodeURIComponent(selectedAgentId) : '')
     + '&limit=300';
@@ -1065,24 +1087,51 @@ async function renderStream() {
     const r = await fetch('/api/transcript?' + qs);
     entries = await r.json();
   } catch (e) {
-    root.replaceChildren();
-    const err = document.createElement('p');
-    err.style.color = 'var(--red)';
-    err.textContent = 'Failed to load transcript.';
-    root.appendChild(err);
+    if (isNewStream || force) {
+      root.replaceChildren();
+      const err = document.createElement('p');
+      err.style.color = 'var(--red)';
+      err.textContent = 'Failed to load transcript.';
+      root.appendChild(err);
+    }
     return;
   }
+
+  // Make sure this response is still relevant.
+  if (streamKey !== renderedStreamKey) return;
+
+  if (isNewStream || force) {
+    root.replaceChildren();
+    renderedEntryKeys = new Set();
+  }
+
   if (!Array.isArray(entries) || entries.length === 0) {
-    root.replaceChildren();
-    const empty = document.createElement('p');
-    empty.style.color = 'var(--text-dim)';
-    empty.textContent = 'No entries yet.';
-    root.appendChild(empty);
+    if (isNewStream) {
+      const empty = document.createElement('p');
+      empty.style.color = 'var(--text-dim)';
+      empty.textContent = 'No entries yet.';
+      root.appendChild(empty);
+    }
     return;
   }
-  root.replaceChildren();
-  for (const e of entries) root.appendChild(renderEntry(e));
-  root.scrollTop = root.scrollHeight;
+
+  // Append only missing entries (keyed by uuid, falling back to ts+type).
+  let appendedAny = false;
+  for (const e of entries) {
+    const key = e.uuid || (e.ts + '|' + e.type + '|' + (e.envelope_id || ''));
+    if (renderedEntryKeys.has(key)) continue;
+    renderedEntryKeys.add(key);
+    root.appendChild(renderEntry(e));
+    appendedAny = true;
+  }
+
+  // Scroll to bottom only if it's a fresh stream OR the user was already near
+  // the bottom when the update arrived. Otherwise preserve their position.
+  if (isNewStream || force) {
+    root.scrollTop = root.scrollHeight;
+  } else if (appendedAny && wasNearBottom) {
+    root.scrollTop = root.scrollHeight;
+  }
 }
 
 function renderEntry(e) {
