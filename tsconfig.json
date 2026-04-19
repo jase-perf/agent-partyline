@@ -10,5 +10,5 @@
     "outDir": "./dist",
     "types": ["bun-types"]
   },
-  "include": ["src/**/*.ts", "dashboard/**/*.ts"]
+  "include": ["src/**/*.ts", "dashboard/**/*.ts", "tests/**/*.ts"]
 }
