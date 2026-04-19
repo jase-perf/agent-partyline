@@ -69,7 +69,7 @@ function connect() {
   ws.onmessage = function(e) {
     var data = JSON.parse(e.data);
     if (data.type === 'sessions') updateSessions(data.data);
-    else if (data.type === 'message') addMessage(data.data);
+    else if (data.type === 'message') { addMessage(data.data); addMessageToBus(data.data); }
     else if (data.type === 'quota') updateQuota(data.data);
     else if (data.type === 'overrides') { contextOverrides = data.data; updateSessions(lastSessions); }
     else if (data.type === 'session-update') handleSessionUpdate(data.data);
@@ -590,14 +590,22 @@ function handleSessionUpdate(session) {
 }
 
 function handleJsonlEvent(event) {
+  if (!event) return;
   // Append to timeline if we're viewing the relevant session
-  if (currentView === 'session-detail' && selectedSessionId && event) {
+  if (currentView === 'session-detail' && selectedSessionId) {
     if (event.session_id === selectedSessionId || event.session_name === selectedSessionId) {
       prependTimelineEvent(event);
     }
   }
-  // Also buffer for history view
-  historyBuffer.push(event);
+  // Append to history list if loaded
+  if (historyLoaded) {
+    var list = document.getElementById('history-list');
+    var emptyMsg = list && list.querySelector('.empty-msg');
+    if (emptyMsg) emptyMsg.remove();
+    addHookOption(event.hook_event);
+    if (list) list.appendChild(buildHistoryItem(event));
+    applyHistoryFilters();
+  }
 }
 
 // --- Session detail view ---
@@ -833,7 +841,161 @@ function loadMachinesView() {
     });
 }
 
-function loadHistoryView() { /* Step 6 */ }
+// --- History view ---
+
+var historyEvents = [];
+var historyHooksSeen = new Set();
+var historyLoaded = false;
+
+function buildHistoryItem(ev) {
+  var li = document.createElement('li');
+  li.className = 'history-event';
+  li.dataset.session = ev.session_name || ev.session_id || '';
+  li.dataset.hook = ev.hook_event || '';
+  li.dataset.search = JSON.stringify(ev).toLowerCase();
+
+  var ts = document.createElement('span');
+  ts.className = 'ts';
+  ts.textContent = ev.ts ? new Date(ev.ts).toLocaleTimeString() : '';
+  li.appendChild(ts);
+
+  if (ev.session_name || ev.session_id) {
+    var stag = document.createElement('span');
+    stag.className = 'session-tag';
+    stag.textContent = ev.session_name || ev.session_id;
+    li.appendChild(stag);
+  }
+
+  var hook = document.createElement('span');
+  hook.className = 'hook ' + hookClass(ev.hook_event);
+  hook.textContent = ev.hook_event || 'event';
+  li.appendChild(hook);
+
+  var detail = document.createElement('span');
+  detail.className = 'detail';
+  var detailText = '';
+  if (ev.tool_name) {
+    detailText = 'tool: ' + ev.tool_name;
+  } else if (ev.payload) {
+    try {
+      var p = typeof ev.payload === 'string' ? JSON.parse(ev.payload) : ev.payload;
+      if (p.tool_name) detailText = 'tool: ' + p.tool_name;
+      else if (p.message) detailText = String(p.message).slice(0, 80);
+    } catch (e3) { detailText = ''; }
+  }
+  detail.textContent = detailText;
+  li.appendChild(detail);
+
+  return li;
+}
+
+function applyHistoryFilters() {
+  var filterText = document.getElementById('history-filter').value.toLowerCase();
+  var filterHook = document.getElementById('history-hook-filter').value;
+  var list = document.getElementById('history-list');
+  if (!list) return;
+  list.querySelectorAll('.history-event').forEach(function(li) {
+    var hookMatch = !filterHook || li.dataset.hook === filterHook;
+    var textMatch = !filterText || li.dataset.search.indexOf(filterText) !== -1;
+    li.classList.toggle('hidden', !(hookMatch && textMatch));
+  });
+}
+
+function addHookOption(hookEvent) {
+  if (!hookEvent || historyHooksSeen.has(hookEvent)) return;
+  historyHooksSeen.add(hookEvent);
+  var sel = document.getElementById('history-hook-filter');
+  if (!sel) return;
+  var opt = document.createElement('option');
+  opt.value = hookEvent;
+  opt.textContent = hookEvent;
+  sel.appendChild(opt);
+}
+
+function loadHistoryView() {
+  var filterInput = document.getElementById('history-filter');
+  var hookSelect = document.getElementById('history-hook-filter');
+  var list = document.getElementById('history-list');
+  if (!list) return;
+
+  if (!historyLoaded) {
+    list.textContent = '';
+    list.appendChild(makeEmptyLi('Loading...'));
+
+    fetch('/api/events?limit=500')
+      .then(function(r) { return r.json(); })
+      .then(function(events) {
+        historyEvents = events || [];
+        list.textContent = '';
+        if (historyEvents.length === 0) {
+          list.appendChild(makeEmptyLi('No events recorded yet.'));
+        } else {
+          historyEvents.forEach(function(ev) {
+            addHookOption(ev.hook_event);
+            list.appendChild(buildHistoryItem(ev));
+          });
+        }
+        historyLoaded = true;
+      })
+      .catch(function() {
+        list.textContent = '';
+        list.appendChild(makeEmptyLi('Failed to load history.'));
+      });
+  }
+
+  // Wire up filter controls (safe to do multiple times — handlers are idempotent after first load)
+  if (filterInput && !filterInput.dataset.wired) {
+    filterInput.dataset.wired = '1';
+    filterInput.addEventListener('input', applyHistoryFilters);
+  }
+  if (hookSelect && !hookSelect.dataset.wired) {
+    hookSelect.dataset.wired = '1';
+    hookSelect.addEventListener('change', applyHistoryFilters);
+  }
+}
+
+// Wire party-line bus in History view (mirrors addMessage to feed2)
+function addMessageToBus(msg) {
+  var feed2 = document.getElementById('feed2');
+  if (!feed2) return;
+  var showHB = document.getElementById('showHeartbeats2');
+  var showAnn = document.getElementById('showAnnounce2');
+  if (msg.type === 'heartbeat' && showHB && !showHB.checked) return;
+  if (msg.type === 'announce' && showAnn && !showAnn.checked) return;
+
+  var busCount = document.getElementById('bus-count');
+  if (busCount) busCount.textContent = String(parseInt(busCount.textContent || '0', 10) + 1);
+
+  var time = new Date(msg.ts).toLocaleTimeString();
+  var el = document.createElement('div');
+  el.className = 'msg';
+
+  var timeSpan = document.createElement('span');
+  timeSpan.className = 'time';
+  timeSpan.textContent = time;
+  el.appendChild(timeSpan);
+  el.appendChild(document.createTextNode(' '));
+
+  var typeSpan = document.createElement('span');
+  typeSpan.className = 'type type-' + msg.type;
+  typeSpan.textContent = msg.type;
+  el.appendChild(typeSpan);
+  el.appendChild(document.createTextNode(' '));
+
+  var routeSpan = document.createElement('span');
+  routeSpan.className = 'route';
+  routeSpan.textContent = msg.from + ' \u2192 ' + msg.to;
+  el.appendChild(routeSpan);
+  el.appendChild(document.createTextNode(' '));
+
+  var bodySpan = document.createElement('span');
+  bodySpan.className = 'body';
+  bodySpan.textContent = msg.body;
+  el.appendChild(bodySpan);
+
+  feed2.appendChild(el);
+  feed2.scrollTop = feed2.scrollHeight;
+}
 
 sendBtn.addEventListener('click', doSend);
 sendMsg.addEventListener('keydown', function(e) { if (e.key === 'Enter') doSend(); });

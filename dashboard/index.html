@@ -101,7 +101,24 @@
   </section>
 
   <section data-view="history" class="view" hidden>
-    <p class="placeholder">History view — coming soon.</p>
+    <h2>History</h2>
+
+    <details class="history-bus" id="historyBus">
+      <summary>Party-line bus <span id="bus-count" class="bus-count">0</span></summary>
+      <div class="filters history-bus-filters">
+        <label><input type="checkbox" id="showHeartbeats2"> Show heartbeats</label>
+        <label><input type="checkbox" id="showAnnounce2" checked> Show announces</label>
+      </div>
+      <div class="feed" id="feed2"></div>
+    </details>
+
+    <div class="history-controls">
+      <input type="search" id="history-filter" placeholder="Filter events...">
+      <select id="history-hook-filter">
+        <option value="">All hooks</option>
+      </select>
+    </div>
+    <ul id="history-list"></ul>
   </section>
 
 </div>
