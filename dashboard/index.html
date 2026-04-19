@@ -3,57 +3,82 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Party Line — Dashboard</title>
+<title>Party Line — Mission Control</title>
 <link rel="stylesheet" href="/dashboard.css">
 </head>
 <body>
 
 <header>
   <h1>Party Line</h1>
+  <nav class="tabs" id="tabs">
+    <button data-view="overview" class="active">Overview</button>
+    <button data-view="session-detail" disabled>Session</button>
+    <button data-view="machines">Machines</button>
+    <button data-view="history">History</button>
+  </nav>
   <span class="conn-status" id="connStatus">connecting...</span>
 </header>
 
 <div class="main">
-  <div class="sessions">
-    <h2>Sessions</h2>
-    <div id="sessionList"><span style="color:var(--text-dim)">waiting for heartbeats...</span></div>
-    <div class="quota-panel" id="quotaPanel" style="display:none">
-      <h2>API Quota</h2>
-      <div class="quota-row">
-        <div class="quota-label"><span>5-hour window</span><span class="quota-pct" id="quota5hPct">—</span></div>
-        <div class="quota-bar-bg"><div class="quota-bar-fg ok" id="quota5hBar" style="width:0%"></div></div>
-        <div class="quota-reset" id="quota5hReset"></div>
-      </div>
-      <div class="quota-row">
-        <div class="quota-label"><span>Weekly</span><span class="quota-pct" id="quota7dPct">—</span></div>
-        <div class="quota-bar-bg"><div class="quota-bar-fg ok" id="quota7dBar" style="width:0%"></div></div>
-        <div class="quota-reset" id="quota7dReset"></div>
-      </div>
-      <div class="quota-fetched" id="quotaFetched"></div>
-    </div>
-  </div>
 
-  <div class="feed-container">
-    <div class="filters">
-      <label><input type="checkbox" id="showHeartbeats"> Show heartbeats</label>
-      <label><input type="checkbox" id="showAnnounce" checked> Show announces</label>
-      <label><input type="checkbox" id="autoscroll" checked> Auto-scroll</label>
-      <span id="msgCount" style="margin-left:auto">0 messages</span>
+  <section data-view="overview" class="view active">
+    <div class="sessions">
+      <h2>Sessions</h2>
+      <div id="sessionList"><span style="color:var(--text-dim)">waiting for heartbeats...</span></div>
+      <div class="quota-panel" id="quotaPanel" style="display:none">
+        <h2>API Quota</h2>
+        <div class="quota-row">
+          <div class="quota-label"><span>5-hour window</span><span class="quota-pct" id="quota5hPct">—</span></div>
+          <div class="quota-bar-bg"><div class="quota-bar-fg ok" id="quota5hBar" style="width:0%"></div></div>
+          <div class="quota-reset" id="quota5hReset"></div>
+        </div>
+        <div class="quota-row">
+          <div class="quota-label"><span>Weekly</span><span class="quota-pct" id="quota7dPct">—</span></div>
+          <div class="quota-bar-bg"><div class="quota-bar-fg ok" id="quota7dBar" style="width:0%"></div></div>
+          <div class="quota-reset" id="quota7dReset"></div>
+        </div>
+        <div class="quota-fetched" id="quotaFetched"></div>
+      </div>
     </div>
-    <div class="feed" id="feed"></div>
-    <div class="send-bar">
-      <label>To:</label>
-      <input class="to" id="sendTo" placeholder="session or all" value="all">
-      <label>Type:</label>
-      <select id="sendType">
-        <option value="message">message</option>
-        <option value="request">request</option>
-        <option value="status">status</option>
-      </select>
-      <input class="msg" id="sendMsg" placeholder="Type a message..." autofocus>
-      <button id="sendBtn">Send</button>
+
+    <div class="overview-right">
+      <div id="overview-grid"></div>
+      <div class="feed-container">
+        <div class="filters">
+          <label><input type="checkbox" id="showHeartbeats"> Show heartbeats</label>
+          <label><input type="checkbox" id="showAnnounce" checked> Show announces</label>
+          <label><input type="checkbox" id="autoscroll" checked> Auto-scroll</label>
+          <span id="msgCount" style="margin-left:auto">0 messages</span>
+        </div>
+        <div class="feed" id="feed"></div>
+        <div class="send-bar">
+          <label>To:</label>
+          <input class="to" id="sendTo" placeholder="session or all" value="all">
+          <label>Type:</label>
+          <select id="sendType">
+            <option value="message">message</option>
+            <option value="request">request</option>
+            <option value="status">status</option>
+          </select>
+          <input class="msg" id="sendMsg" placeholder="Type a message..." autofocus>
+          <button id="sendBtn">Send</button>
+        </div>
+      </div>
     </div>
-  </div>
+  </section>
+
+  <section data-view="session-detail" class="view" hidden>
+    <p class="placeholder">Select a session from the Overview to see details.</p>
+  </section>
+
+  <section data-view="machines" class="view" hidden>
+    <p class="placeholder">Machines view — coming soon.</p>
+  </section>
+
+  <section data-view="history" class="view" hidden>
+    <p class="placeholder">History view — coming soon.</p>
+  </section>
+
 </div>
 
 <div class="ctx-menu" id="ctxMenu"></div>

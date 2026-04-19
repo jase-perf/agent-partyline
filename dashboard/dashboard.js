@@ -14,6 +14,35 @@ let totalMessages = 0;
 let ws;
 let contextOverrides = {};
 let lastSessions = [];
+let currentView = 'overview';
+let selectedSessionId = null;
+
+// --- Tab router ---
+
+function renderView(view) {
+  currentView = view;
+  document.querySelectorAll('.view').forEach(function(el) {
+    el.classList.remove('active');
+    el.hidden = true;
+  });
+  var active = document.querySelector('.view[data-view="' + view + '"]');
+  if (active) {
+    active.classList.add('active');
+    active.hidden = false;
+  }
+  // Run view-specific init
+  if (view === 'machines') loadMachinesView();
+  if (view === 'history') loadHistoryView();
+  if (view === 'session-detail' && selectedSessionId) loadSessionDetailView();
+}
+
+document.getElementById('tabs').addEventListener('click', function(e) {
+  var btn = e.target.closest('button[data-view]');
+  if (!btn || btn.disabled) return;
+  document.querySelectorAll('.tabs button').forEach(function(b) { b.classList.remove('active'); });
+  btn.classList.add('active');
+  renderView(btn.dataset.view);
+});
 
 function esc(s) {
   const el = document.createElement('span');
@@ -42,6 +71,8 @@ function connect() {
     else if (data.type === 'message') addMessage(data.data);
     else if (data.type === 'quota') updateQuota(data.data);
     else if (data.type === 'overrides') { contextOverrides = data.data; updateSessions(lastSessions); }
+    else if (data.type === 'session-update') handleSessionUpdate(data.data);
+    else if (data.type === 'jsonl') handleJsonlEvent(data.data);
   };
 }
 
@@ -418,6 +449,17 @@ function updateQuota(q) {
     document.getElementById('quotaFetched').textContent = ago < 60 ? 'just now' : Math.round(ago / 60) + 'm ago';
   }
 }
+
+// --- WebSocket event handlers for new message types ---
+
+function handleSessionUpdate(session) { /* Step 3/4 fills this in */ }
+function handleJsonlEvent(event) { /* Step 4/6 fills this in */ }
+
+// --- Placeholder view loaders (filled in later steps) ---
+
+function loadMachinesView() { /* Step 5 */ }
+function loadHistoryView() { /* Step 6 */ }
+function loadSessionDetailView() { /* Step 4 */ }
 
 sendBtn.addEventListener('click', doSend);
 sendMsg.addEventListener('keydown', function(e) { if (e.key === 'Enter') doSend(); });
