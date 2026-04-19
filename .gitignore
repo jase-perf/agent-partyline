@@ -5,3 +5,4 @@ bun.lock
 *.db-wal
 *.db-shm
 .playwright-mcp/
+.superpowers/
