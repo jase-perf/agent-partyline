@@ -1438,6 +1438,30 @@ document.getElementById('detail-stream').addEventListener('click', (e) => {
       codeBtn.textContent = 'copied';
       setTimeout(() => { codeBtn.textContent = 'copy'; }, 1200);
     });
+    return;
+  }
+
+  const spawn = e.target.closest('.spawn-marker');
+  if (spawn) {
+    const aid = spawn.dataset.agentId;
+    if (aid) {
+      selectedAgentId = aid;
+      renderAgentTree();
+      renderStream();
+    }
+    return;
+  }
+
+  const pl = e.target.closest('.pl-entry');
+  if (pl && pl.dataset.otherSession) {
+    selectedSessionId = pl.dataset.otherSession;
+    const tab = document.querySelector('button[data-view="session-detail"]');
+    if (tab) {
+      tab.disabled = false;
+      tab.click();
+    }
+    loadSessionDetailView();
+    return;
   }
 });
 
