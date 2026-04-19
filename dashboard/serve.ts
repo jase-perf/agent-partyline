@@ -117,6 +117,8 @@ setInterval(() => {
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const indexHtml = readFileSync(join(__dirname, 'index.html'), 'utf-8')
+const dashboardCss = readFileSync(join(__dirname, 'dashboard.css'), 'utf-8')
+const dashboardJs = readFileSync(join(__dirname, 'dashboard.js'), 'utf-8')
 
 // --- Server ---
 
@@ -229,6 +231,14 @@ const server = Bun.serve({
         )
         .all()
       return Response.json(machines)
+    }
+
+    // Static assets
+    if (url.pathname === '/dashboard.css') {
+      return new Response(dashboardCss, { headers: { 'Content-Type': 'text/css' } })
+    }
+    if (url.pathname === '/dashboard.js') {
+      return new Response(dashboardJs, { headers: { 'Content-Type': 'application/javascript' } })
     }
 
     // Dashboard HTML
