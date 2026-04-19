@@ -217,7 +217,16 @@ function connect() {
   ws.onmessage = function(e) {
     var data = JSON.parse(e.data);
     if (data.type === 'sessions') updateSessions(data.data);
-    else if (data.type === 'message') { addMessage(data.data); addMessageToBus(data.data); if (data.data.to && data.data.to !== 'all') bumpUnread(data.data.to); }
+    else if (data.type === 'message') {
+      addMessage(data.data);
+      addMessageToBus(data.data);
+      if (data.data.to && data.data.to !== 'all') bumpUnread(data.data.to);
+      // Live-update the session-detail stream if the envelope involves the viewed session.
+      if (currentView === 'session-detail' && selectedSessionId &&
+          (data.data.from === selectedSessionId || data.data.to === selectedSessionId)) {
+        renderStream();
+      }
+    }
     else if (data.type === 'quota') updateQuota(data.data);
     else if (data.type === 'overrides') { contextOverrides = data.data; updateSessions(lastSessions); }
     else if (data.type === 'session-update') { handleSessionUpdate(data.data); bumpUnread(data.data.name); }
