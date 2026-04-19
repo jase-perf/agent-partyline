@@ -16,6 +16,13 @@ let contextOverrides = {};
 let lastSessions = [];
 let sessionSources = {};  // session name -> source string, populated from session-update events
 let currentView = 'switchboard';
+let localMachineId = null;
+let sessionMachines = {};  // session name -> machine_id
+
+fetch('/api/self')
+  .then(r => r.json())
+  .then(data => { localMachineId = data.machine_id; })
+  .catch(() => {});
 let selectedSessionId = null;
 var historyBuffer = [];
 
@@ -508,6 +515,17 @@ function sourceBadge(source) {
   return badge;
 }
 
+function hostBadge(name) {
+  var mid = sessionMachines[name];
+  if (!mid) return null;
+  if (localMachineId && mid === localMachineId) return null;
+  var badge = document.createElement('span');
+  badge.className = 'host-badge';
+  badge.title = 'Remote: ' + mid;
+  badge.textContent = mid.slice(0, 3);
+  return badge;
+}
+
 function stateClass(state) {
   if (state === 'working') return 'state-working';
   if (state === 'idle') return 'state-idle';
@@ -529,6 +547,9 @@ function buildCardContents(s) {
   header.appendChild(pill);
 
   header.appendChild(sourceBadge(sessionSources[s.name]));
+
+  var hb = hostBadge(s.name);
+  if (hb) header.appendChild(hb);
 
   var nameEl = document.createElement('span');
   nameEl.className = 'session-name';
@@ -655,6 +676,9 @@ function handleSessionUpdate(session) {
   // Record source for this session (keyed by name for card rendering)
   if (session.name && session.source) {
     sessionSources[session.name] = session.source;
+  }
+  if (session.name && session.machine_id) {
+    sessionMachines[session.name] = session.machine_id;
   }
 
   // Update detail view header if we're viewing this session

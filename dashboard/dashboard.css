@@ -573,4 +573,17 @@
     flex-shrink: 0;
   }
   .filters label { cursor: pointer; user-select: none; }
+
+  .host-badge {
+    display: inline-block;
+    background: var(--purple);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 2px 5px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-left: 6px;
+  }
   .filters input[type="checkbox"] { margin-right: 4px; }

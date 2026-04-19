@@ -273,6 +273,11 @@ const server = Bun.serve({
       return Response.json({ buckets: hourlyToolCalls(db, id) })
     }
 
+    // REST API: self (local machine identity)
+    if (url.pathname === '/api/self') {
+      return Response.json({ machine_id: machineId })
+    }
+
     // REST API: machines
     if (url.pathname === '/api/machines') {
       const machines = db
