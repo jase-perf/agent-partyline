@@ -600,16 +600,205 @@ function handleJsonlEvent(event) {
   historyBuffer.push(event);
 }
 
-// --- Stub functions filled in later steps ---
+// --- Session detail view ---
 
-function updateDetailHeader(session) { /* Step 4 */ }
-function prependTimelineEvent(event) { /* Step 4 */ }
+function hookClass(hookEvent) {
+  if (!hookEvent) return 'hook-default';
+  if (hookEvent === 'PreToolUse' || hookEvent === 'PostToolUse') return 'hook-PreToolUse';
+  if (hookEvent === 'Stop') return 'hook-Stop';
+  if (hookEvent === 'SubagentStart' || hookEvent === 'SubagentStop') return 'hook-SubagentStart';
+  if (hookEvent === 'Notification') return 'hook-Notification';
+  return 'hook-default';
+}
+
+function makeEmptyLi(text) {
+  var li = document.createElement('li');
+  li.className = 'empty-msg';
+  li.textContent = text;
+  return li;
+}
+
+function buildTimelineItem(ev) {
+  var li = document.createElement('li');
+  li.className = 'timeline-event';
+
+  var ts = document.createElement('span');
+  ts.className = 'ts';
+  ts.textContent = ev.ts ? new Date(ev.ts).toLocaleTimeString() : '';
+  li.appendChild(ts);
+
+  var hook = document.createElement('span');
+  hook.className = 'hook ' + hookClass(ev.hook_event);
+  hook.textContent = ev.hook_event || 'event';
+  li.appendChild(hook);
+
+  var detail = document.createElement('span');
+  detail.className = 'detail';
+  var detailText = '';
+  if (ev.tool_name) {
+    detailText = 'tool: ' + ev.tool_name;
+  } else if (ev.payload) {
+    try {
+      var p = typeof ev.payload === 'string' ? JSON.parse(ev.payload) : ev.payload;
+      if (p.tool_name) detailText = 'tool: ' + p.tool_name;
+      else if (p.message) detailText = String(p.message).slice(0, 80);
+    } catch (e2) { detailText = ''; }
+  }
+  detail.textContent = detailText;
+  li.appendChild(detail);
+
+  if (ev.payload) {
+    var det = document.createElement('details');
+    det.className = 'payload';
+    var sum = document.createElement('summary');
+    sum.textContent = 'payload';
+    det.appendChild(sum);
+    var pre = document.createElement('pre');
+    var payloadStr = typeof ev.payload === 'string' ? ev.payload : JSON.stringify(ev.payload, null, 2);
+    pre.textContent = payloadStr;
+    det.appendChild(pre);
+    li.appendChild(det);
+  }
+
+  return li;
+}
+
+function buildSubagentItem(sub) {
+  var li = document.createElement('li');
+  li.className = 'subagent';
+
+  var statusEl = document.createElement('span');
+  var subState = sub.state || 'running';
+  statusEl.className = 'status status-' + subState;
+  statusEl.textContent = subState;
+  li.appendChild(statusEl);
+
+  var typeEl = document.createElement('span');
+  typeEl.className = 'agent-type';
+  typeEl.textContent = sub.agent_type || 'Agent';
+  li.appendChild(typeEl);
+
+  var descEl = document.createElement('span');
+  descEl.className = 'agent-desc';
+  descEl.textContent = sub.description || sub.task_description || '';
+  li.appendChild(descEl);
+
+  var durEl = document.createElement('span');
+  durEl.className = 'agent-dur';
+  durEl.textContent = sub.started_at ? 'started ' + new Date(sub.started_at).toLocaleTimeString() : '';
+  li.appendChild(durEl);
+
+  return li;
+}
+
+function populateDetailHeader(session) {
+  var stateEl = document.getElementById('detail-state');
+  var nameEl = document.getElementById('detail-name');
+  var cwdEl = document.getElementById('detail-cwd');
+  var modelEl = document.getElementById('detail-model');
+  var ctxEl = document.getElementById('detail-ctx');
+  if (!stateEl) return;
+
+  if (!session) {
+    stateEl.textContent = '';
+    stateEl.className = 'state-pill';
+    if (nameEl) nameEl.textContent = selectedSessionId || '';
+    if (cwdEl) cwdEl.textContent = '';
+    if (modelEl) modelEl.textContent = '';
+    if (ctxEl) ctxEl.textContent = '';
+    return;
+  }
+
+  var state = session.state || 'ended';
+  stateEl.textContent = state;
+  stateEl.className = 'state-pill ' + stateClass(state);
+  if (nameEl) nameEl.textContent = session.session_name || session.session_id || '';
+  if (cwdEl) cwdEl.textContent = session.cwd ? 'cwd: ' + session.cwd : '';
+  if (modelEl) {
+    modelEl.textContent = session.model
+      ? 'model: ' + session.model.replace('claude-', '').replace(/-(\d+)-(\d+)/, ' $1.$2')
+      : '';
+  }
+  if (ctxEl) {
+    ctxEl.textContent = (session.context_tokens !== null && session.context_tokens !== undefined)
+      ? 'ctx: ' + formatTokens(session.context_tokens)
+      : '';
+  }
+}
+
+function updateDetailHeader(session) {
+  if (!session || !selectedSessionId) return;
+  var sessionKey = session.session_id || session.session_name;
+  if (sessionKey !== selectedSessionId) return;
+  populateDetailHeader(session);
+}
+
+function prependTimelineEvent(event) {
+  var timeline = document.getElementById('detail-timeline');
+  if (!timeline) return;
+  var emptyMsg = timeline.querySelector('.empty-msg');
+  if (emptyMsg) emptyMsg.remove();
+  timeline.insertBefore(buildTimelineItem(event), timeline.firstChild);
+}
+
+function loadSessionDetailView() {
+  if (!selectedSessionId) return;
+
+  var stateEl = document.getElementById('detail-state');
+  if (stateEl) { stateEl.textContent = '...'; stateEl.className = 'state-pill'; }
+  var nameEl = document.getElementById('detail-name');
+  if (nameEl) nameEl.textContent = selectedSessionId;
+  var cwdEl = document.getElementById('detail-cwd');
+  if (cwdEl) cwdEl.textContent = '';
+  var modelEl = document.getElementById('detail-model');
+  if (modelEl) modelEl.textContent = '';
+  var ctxEl = document.getElementById('detail-ctx');
+  if (ctxEl) ctxEl.textContent = '';
+
+  var subList = document.getElementById('detail-subagents');
+  var timeline = document.getElementById('detail-timeline');
+  if (subList) { subList.textContent = ''; subList.appendChild(makeEmptyLi('Loading...')); }
+  if (timeline) { timeline.textContent = ''; timeline.appendChild(makeEmptyLi('Loading...')); }
+
+  fetch('/api/session?id=' + encodeURIComponent(selectedSessionId))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      populateDetailHeader(data.session);
+      if (subList) {
+        subList.textContent = '';
+        var subs = data.subagents || [];
+        if (subs.length === 0) {
+          subList.appendChild(makeEmptyLi('No subagents.'));
+        } else {
+          subs.forEach(function(sub) { subList.appendChild(buildSubagentItem(sub)); });
+        }
+      }
+    })
+    .catch(function() {
+      if (subList) { subList.textContent = ''; subList.appendChild(makeEmptyLi('Failed to load.')); }
+    });
+
+  fetch('/api/events?session_id=' + encodeURIComponent(selectedSessionId) + '&limit=200')
+    .then(function(r) { return r.json(); })
+    .then(function(events) {
+      if (timeline) {
+        timeline.textContent = '';
+        if (!events || events.length === 0) {
+          timeline.appendChild(makeEmptyLi('No events yet.'));
+        } else {
+          events.forEach(function(ev) { timeline.appendChild(buildTimelineItem(ev)); });
+        }
+      }
+    })
+    .catch(function() {
+      if (timeline) { timeline.textContent = ''; timeline.appendChild(makeEmptyLi('Failed to load events.')); }
+    });
+}
 
 // --- View loaders ---
 
 function loadMachinesView() { /* Step 5 */ }
 function loadHistoryView() { /* Step 6 */ }
-function loadSessionDetailView() { /* Step 4 */ }
 
 sendBtn.addEventListener('click', doSend);
 sendMsg.addEventListener('keydown', function(e) { if (e.key === 'Enter') doSend(); });

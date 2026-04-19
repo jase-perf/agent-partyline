@@ -68,7 +68,25 @@
   </section>
 
   <section data-view="session-detail" class="view" hidden>
-    <p class="placeholder">Select a session from the Overview to see details.</p>
+    <div class="detail-header">
+      <span class="state-pill" id="detail-state"></span>
+      <h2 id="detail-name"></h2>
+      <div class="detail-meta">
+        <span id="detail-cwd"></span>
+        <span id="detail-model"></span>
+        <span id="detail-ctx"></span>
+      </div>
+    </div>
+    <div class="detail-columns">
+      <div class="detail-col">
+        <h3>Subagents</h3>
+        <ul id="detail-subagents"><li class="empty-msg">No subagents.</li></ul>
+      </div>
+      <div class="detail-col">
+        <h3>Event timeline</h3>
+        <ul id="detail-timeline"><li class="empty-msg">No events yet.</li></ul>
+      </div>
+    </div>
   </section>
 
   <section data-view="machines" class="view" hidden>
