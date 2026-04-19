@@ -587,3 +587,16 @@
     margin-left: 6px;
   }
   .filters input[type="checkbox"] { margin-right: 4px; }
+
+  .unread-badge {
+    display: inline-block;
+    background: var(--red);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 9px;
+    min-width: 16px;
+    text-align: center;
+    margin-left: auto;
+  }

@@ -19,6 +19,51 @@ let currentView = 'switchboard';
 let localMachineId = null;
 let sessionMachines = {};  // session name -> machine_id
 
+// --- localStorage UI state helpers ---
+
+const UI_STATE_KEY = 'partyLine.ui.state';
+
+function loadUiState() {
+  try { return JSON.parse(localStorage.getItem(UI_STATE_KEY) || '{}'); }
+  catch { return {}; }
+}
+
+function saveUiState(state) {
+  try { localStorage.setItem(UI_STATE_KEY, JSON.stringify(state)); } catch {}
+}
+
+function getLastViewedAt(sessionName) {
+  const s = loadUiState();
+  return (s.lastViewedAt && s.lastViewedAt[sessionName]) || 0;
+}
+
+function markSessionViewed(sessionName) {
+  const s = loadUiState();
+  s.lastViewedAt = s.lastViewedAt || {};
+  s.lastViewedAt[sessionName] = Date.now();
+  saveUiState(s);
+}
+
+// --- Unread count state ---
+
+let unreadCounts = {};  // session_name -> integer
+let seededOnce = false;
+
+function bumpUnread(sessionKey) {
+  if (!sessionKey) return;
+  unreadCounts[sessionKey] = (unreadCounts[sessionKey] || 0) + 1;
+  updateSessions(lastSessions);
+}
+
+function resolveNameFromJsonlPath(path) {
+  if (!path) return null;
+  const m = path.match(/\/([0-9a-f-]+)\.jsonl$/);
+  if (!m) return null;
+  const sid = m[1];
+  const found = lastSessions.find(s => s.metadata && s.metadata.status && s.metadata.status.sessionId === sid);
+  return found ? found.name : null;
+}
+
 fetch('/api/self')
   .then(r => r.json())
   .then(data => { localMachineId = data.machine_id; })
@@ -41,7 +86,12 @@ function renderView(view) {
   }
   // Run view-specific init
   if (view === 'history') loadHistoryView();
-  if (view === 'session-detail' && selectedSessionId) loadSessionDetailView();
+  if (view === 'session-detail' && selectedSessionId) {
+    markSessionViewed(selectedSessionId);
+    unreadCounts[selectedSessionId] = 0;
+    updateSessions(lastSessions);
+    loadSessionDetailView();
+  }
 }
 
 document.getElementById('tabs').addEventListener('click', function(e) {
@@ -76,11 +126,11 @@ function connect() {
   ws.onmessage = function(e) {
     var data = JSON.parse(e.data);
     if (data.type === 'sessions') updateSessions(data.data);
-    else if (data.type === 'message') { addMessage(data.data); addMessageToBus(data.data); }
+    else if (data.type === 'message') { addMessage(data.data); addMessageToBus(data.data); if (data.data.to && data.data.to !== 'all') bumpUnread(data.data.to); }
     else if (data.type === 'quota') updateQuota(data.data);
     else if (data.type === 'overrides') { contextOverrides = data.data; updateSessions(lastSessions); }
-    else if (data.type === 'session-update') handleSessionUpdate(data.data);
-    else if (data.type === 'jsonl') handleJsonlEvent(data.data);
+    else if (data.type === 'session-update') { handleSessionUpdate(data.data); bumpUnread(data.data.name); }
+    else if (data.type === 'jsonl') { handleJsonlEvent(data.data); bumpUnread(resolveNameFromJsonlPath(data.data.file_path) || data.data.session_id); }
   };
 }
 
@@ -225,6 +275,10 @@ document.addEventListener('keydown', function(e) {
 
 function updateSessions(sessions) {
   lastSessions = sessions;
+  if (!seededOnce && lastSessions.length > 0) {
+    seededOnce = true;
+    seedUnreadCounts();  // fires once, async
+  }
   updateOverviewGrid(sessions);
   if (sessions.length === 0) {
     sessionList.textContent = 'no sessions';
@@ -526,6 +580,35 @@ function hostBadge(name) {
   return badge;
 }
 
+function unreadBadge(name) {
+  var n = unreadCounts[name] || 0;
+  if (n === 0) return null;
+  var badge = document.createElement('span');
+  badge.className = 'unread-badge';
+  badge.textContent = n > 99 ? '\u2022' : String(n);
+  return badge;
+}
+
+async function seedUnreadCounts() {
+  var state = loadUiState();
+  var map = state.lastViewedAt || {};
+  for (var i = 0; i < lastSessions.length; i++) {
+    var s = lastSessions[i];
+    var since = map[s.name] || 0;
+    try {
+      var r = await fetch('/api/events?session_id=' + encodeURIComponent(s.name) + '&limit=500');
+      var rows = await r.json();
+      var count = 0;
+      for (var j = 0; j < rows.length; j++) {
+        var evTs = new Date(rows[j].ts).getTime();
+        if (evTs > since) count++;
+      }
+      unreadCounts[s.name] = count;
+    } catch (_) {}
+  }
+  updateSessions(lastSessions);
+}
+
 function stateClass(state) {
   if (state === 'working') return 'state-working';
   if (state === 'idle') return 'state-idle';
@@ -550,6 +633,9 @@ function buildCardContents(s) {
 
   var hb = hostBadge(s.name);
   if (hb) header.appendChild(hb);
+
+  var ub = unreadBadge(s.name);
+  if (ub) header.appendChild(ub);
 
   var nameEl = document.createElement('span');
   nameEl.className = 'session-name';
