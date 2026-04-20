@@ -2083,14 +2083,117 @@ document.getElementById('detail-bell')?.addEventListener('click', (ev) => {
   }
 })
 
-// --- Permission request cards (populated in Task 20) ---
+// --- Permission request cards ---
 
-function renderPermissionCard(_data) {
-  /* implemented in Task 20 */
+function renderPermissionCard(data) {
+  if (currentView !== 'session-detail') return
+  if (selectedSessionId !== data.session) return
+  const stream = document.getElementById('detail-stream')
+  if (!stream) return
+
+  const existing = document.querySelector(
+    `.perm-card[data-request-id="${CSS.escape(data.request_id)}"]`,
+  )
+  if (existing) return // idempotent
+
+  const card = document.createElement('div')
+  card.className = 'perm-card perm-card-pending'
+  card.setAttribute('data-request-id', data.request_id)
+
+  const header = document.createElement('div')
+  header.className = 'perm-card-header'
+  header.append('🔐 Permission requested: ')
+  const toolStrong = document.createElement('strong')
+  toolStrong.textContent = data.tool_name
+  header.appendChild(toolStrong)
+  card.appendChild(header)
+
+  const descr = document.createElement('div')
+  descr.className = 'perm-card-descr'
+  descr.textContent = data.description
+  card.appendChild(descr)
+
+  const details = document.createElement('details')
+  details.className = 'perm-card-details'
+  const summary = document.createElement('summary')
+  summary.textContent = 'Show input preview'
+  details.appendChild(summary)
+  const pre = document.createElement('pre')
+  pre.className = 'perm-card-input'
+  let pretty = data.input_preview
+  try {
+    pretty = JSON.stringify(JSON.parse(data.input_preview), null, 2)
+  } catch {
+    /* keep as-is if not JSON */
+  }
+  pre.textContent = pretty
+  details.appendChild(pre)
+  card.appendChild(details)
+
+  const actions = document.createElement('div')
+  actions.className = 'perm-card-actions'
+  const allowBtn = document.createElement('button')
+  allowBtn.className = 'perm-btn perm-btn-allow'
+  allowBtn.textContent = '✅ Allow'
+  const denyBtn = document.createElement('button')
+  denyBtn.className = 'perm-btn perm-btn-deny'
+  denyBtn.textContent = '❌ Deny'
+  const statusEl = document.createElement('span')
+  statusEl.className = 'perm-card-status'
+  statusEl.hidden = true
+  actions.appendChild(allowBtn)
+  actions.appendChild(denyBtn)
+  actions.appendChild(statusEl)
+  card.appendChild(actions)
+
+  allowBtn.addEventListener('click', () => respondToPermission(data, 'allow', card))
+  denyBtn.addEventListener('click', () => respondToPermission(data, 'deny', card))
+
+  const wasNear = isNearBottom(stream)
+  stream.appendChild(card)
+  if (wasNear) stream.scrollTop = stream.scrollHeight
 }
 
-function updatePermissionCardResolved(_data) {
-  /* implemented in Task 20 */
+async function respondToPermission(data, behavior, card) {
+  const allowBtn = card.querySelector('.perm-btn-allow')
+  const denyBtn = card.querySelector('.perm-btn-deny')
+  const statusEl = card.querySelector('.perm-card-status')
+  if (allowBtn) allowBtn.disabled = true
+  if (denyBtn) denyBtn.disabled = true
+  try {
+    const res = await fetch('/api/permission-response', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session: data.session, request_id: data.request_id, behavior }),
+    })
+    if (!res.ok) throw new Error('HTTP ' + res.status)
+    // Success: server will broadcast permission-resolved which updates the card.
+  } catch (err) {
+    if (allowBtn) allowBtn.disabled = false
+    if (denyBtn) denyBtn.disabled = false
+    if (statusEl) {
+      statusEl.hidden = false
+      statusEl.textContent = 'Error: ' + (err.message || 'send failed')
+      statusEl.className = 'perm-card-status perm-card-status-error'
+    }
+  }
+}
+
+function updatePermissionCardResolved(data) {
+  const card = document.querySelector(
+    `.perm-card[data-request-id="${CSS.escape(data.request_id)}"]`,
+  )
+  if (!card) return
+  card.classList.remove('perm-card-pending')
+  card.classList.add('perm-card-resolved')
+  const actions = card.querySelector('.perm-card-actions')
+  if (actions) {
+    actions.replaceChildren()
+    const status = document.createElement('span')
+    status.className = 'perm-card-status perm-card-status-' + data.behavior
+    status.textContent = data.behavior === 'allow' ? '✅ Allowed' : '❌ Denied'
+    actions.appendChild(status)
+  }
 }
 
 // When the tab becomes visible again, dispatch session-viewed for the current
