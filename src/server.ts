@@ -14,10 +14,12 @@ import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
+import { z } from 'zod'
 import { UdpMulticastTransport } from './transport/udp-multicast.js'
 import { PresenceTracker } from './presence.js'
 import { createEnvelope, generateCallbackId } from './protocol.js'
 import { getSessionStatus } from './introspect.js'
+import { createPermissionBridge } from './permission-bridge.js'
 import type { Envelope, MessageType } from './types.js'
 
 // --- Session name resolution ---
@@ -138,6 +140,36 @@ const mcp = new Server(
       `- party_line_list_sessions: See which sessions are currently connected.`,
       `- party_line_history: View recent messages on the bus.`,
     ].join('\n'),
+  },
+)
+
+// --- Permission bridge (MCP ↔ UDP for claude/channel/permission) ---
+
+const permissionBridge = createPermissionBridge({
+  sessionName,
+  sendEnvelope: (envelope) => {
+    void transport.send(envelope)
+  },
+  sendMcpNotification: ({ request_id, behavior }) => {
+    void mcp.notification({
+      method: 'notifications/claude/channel/permission',
+      params: { request_id, behavior },
+    })
+  },
+})
+
+mcp.setNotificationHandler(
+  z.object({
+    method: z.literal('notifications/claude/channel/permission_request'),
+    params: z.object({
+      request_id: z.string(),
+      tool_name: z.string(),
+      description: z.string(),
+      input_preview: z.string(),
+    }),
+  }),
+  async ({ params }) => {
+    permissionBridge.handlePermissionRequest(params)
   },
 )
 
