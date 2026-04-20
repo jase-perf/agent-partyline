@@ -10,6 +10,8 @@ let totalMessages = 0
 let ws
 let contextOverrides = {}
 let lastSessions = []
+let sessionsReady = false
+let pendingRouteState = null // if set, applyRoute will re-fire once sessions arrive
 let sessionSources = {} // session name -> source string, populated from session-update events
 let currentView = 'switchboard'
 let localMachineId = null
@@ -146,6 +148,20 @@ function applyRoute(state, opts) {
     if (sessionDetailTab) sessionDetailTab.classList.add('active')
     renderView('session-detail')
     if (!known) {
+      if (!sessionsReady) {
+        // Defer the "unknown session" UI until we've heard from the server at least once.
+        pendingRouteState = state
+        const stream = document.getElementById('detail-stream')
+        if (stream) {
+          stream.replaceChildren()
+          const p = document.createElement('p')
+          p.style.color = 'var(--text-dim)'
+          p.textContent = 'Loading session…'
+          stream.appendChild(p)
+        }
+        return
+      }
+      // Sessions are loaded and this name is genuinely unknown — render the fallback.
       setTimeout(() => {
         const stream = document.getElementById('detail-stream')
         if (!stream) return
@@ -486,6 +502,15 @@ function updateSessions(sessions) {
     seedUnreadCounts() // fires once, async
   }
   updateOverviewGrid(sessions)
+
+  if (!sessionsReady) {
+    sessionsReady = true
+    if (pendingRouteState) {
+      const s = pendingRouteState
+      pendingRouteState = null
+      applyRoute(s, { skipPush: true })
+    }
+  }
 }
 
 function addMessage(msg) {
