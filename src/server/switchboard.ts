@@ -36,7 +36,9 @@ export interface Envelope {
   ts: number
   from: string
   to: string
-  type: string
+  // Renamed from `type` so the outer wire frame can use `type: 'envelope'`
+  // without shadowing this field during object spread.
+  envelope_type: string
   body: string | null
   callback_id: string | null
   response_to: string | null
@@ -87,14 +89,14 @@ export function createSwitchboard(db: Database): Switchboard {
       ts: envelope.ts,
       from_name: envelope.from,
       to_name: envelope.to,
-      type: envelope.type,
+      type: envelope.envelope_type,
       body: envelope.body,
       callback_id: envelope.callback_id,
       response_to: envelope.response_to,
       cc_session_uuid: null,
     })
 
-    const payload = JSON.stringify({ ...envelope, type: 'envelope' })
+    const payload = JSON.stringify({ type: 'envelope', ...envelope })
 
     if (envelope.to === 'all') {
       for (const [name, sock] of sessionsByName) {
@@ -119,7 +121,7 @@ export function createSwitchboard(db: Database): Switchboard {
       }
     }
 
-    toObservers({ ...envelope, type: 'envelope' })
+    toObservers({ type: 'envelope', ...envelope })
   }
 
   return {
@@ -201,7 +203,7 @@ export function createSwitchboard(db: Database): Switchboard {
             ts: Date.now(),
             from: name,
             to: String(frame['to'] ?? ''),
-            type: String(frame['frame_type'] ?? 'message'),
+            envelope_type: String(frame['frame_type'] ?? 'message'),
             body: frame['body'] == null ? null : String(frame['body']),
             callback_id: frame['callback_id'] == null ? null : String(frame['callback_id']),
             response_to: frame['response_to'] == null ? null : String(frame['response_to']),
