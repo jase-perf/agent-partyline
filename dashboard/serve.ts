@@ -170,6 +170,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const indexHtml = readFileSync(join(__dirname, 'index.html'), 'utf-8')
 const dashboardCss = readFileSync(join(__dirname, 'dashboard.css'), 'utf-8')
 const dashboardJs = readFileSync(join(__dirname, 'dashboard.js'), 'utf-8')
+const notificationsJs = readFileSync(join(__dirname, 'notifications.js'), 'utf-8')
 
 // --- Server ---
 
@@ -383,6 +384,11 @@ const server = Bun.serve({
     }
     if (url.pathname === '/dashboard.js') {
       return new Response(dashboardJs, { headers: { 'Content-Type': 'application/javascript' } })
+    }
+    if (url.pathname === '/notifications.js') {
+      return new Response(notificationsJs, {
+        headers: { 'Content-Type': 'application/javascript' },
+      })
     }
 
     // Dashboard HTML

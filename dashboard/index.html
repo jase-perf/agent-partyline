@@ -1,126 +1,199 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Party Line — Mission Control</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..700;1,400..700&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/dashboard.css">
-</head>
-<body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Party Line — Mission Control</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:ital,wght@0,400..700;1,400..700&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/dashboard.css" />
+  </head>
+  <body>
+    <div id="notif-banner" class="notif-banner" hidden>
+      <span id="notif-banner-text">🔔 Enable browser notifications for Party Line</span>
+      <button id="notif-banner-btn" type="button">Enable</button>
+      <button
+        id="notif-banner-dismiss"
+        class="notif-banner-dismiss"
+        type="button"
+        aria-label="Dismiss"
+      >
+        ×
+      </button>
+    </div>
 
-<header>
-  <h1>Party Line</h1>
-  <nav class="tabs" id="tabs">
-    <button data-view="switchboard" class="active">Switchboard</button>
-    <button data-view="session-detail" disabled>Session</button>
-    <button data-view="history">History</button>
-  </nav>
-  <div class="header-quota" id="quotaPanel" hidden title="API quota usage">
-    <span class="quota-pip" id="quota5hPip">
-      <span class="quota-label">5h</span>
-      <span class="quota-pct" id="quota5hPct">—</span>
-    </span>
-    <span class="quota-pip" id="quota7dPip">
-      <span class="quota-label">7d</span>
-      <span class="quota-pct" id="quota7dPct">—</span>
-    </span>
-  </div>
-  <span class="conn-status" id="connStatus">connecting...</span>
-</header>
+    <header>
+      <h1>Party Line</h1>
+      <nav class="tabs" id="tabs">
+        <button data-view="switchboard" class="active">Switchboard</button>
+        <button data-view="session-detail" disabled>Session</button>
+        <button data-view="history">History</button>
+      </nav>
+      <div class="header-quota" id="quotaPanel" hidden title="API quota usage">
+        <span class="quota-pip" id="quota5hPip">
+          <span class="quota-label">5h</span>
+          <span class="quota-pct" id="quota5hPct">—</span>
+        </span>
+        <span class="quota-pip" id="quota7dPip">
+          <span class="quota-label">7d</span>
+          <span class="quota-pct" id="quota7dPct">—</span>
+        </span>
+      </div>
+      <span class="conn-status" id="connStatus">connecting...</span>
+    </header>
 
-<div class="main">
+    <div class="main">
+      <section data-view="switchboard" class="view active">
+        <div class="switchboard-wrap">
+          <svg id="cross-call-overlay" class="cross-overlay" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker
+                id="arrow-blue"
+                viewBox="0 -5 10 10"
+                refX="10"
+                refY="0"
+                markerWidth="6"
+                markerHeight="6"
+                orient="auto"
+              >
+                <path d="M0,-5L10,0L0,5" fill="#58a6ff" />
+              </marker>
+              <marker
+                id="arrow-yellow"
+                viewBox="0 -5 10 10"
+                refX="10"
+                refY="0"
+                markerWidth="6"
+                markerHeight="6"
+                orient="auto"
+              >
+                <path d="M0,-5L10,0L0,5" fill="#d29922" />
+              </marker>
+              <marker
+                id="arrow-green"
+                viewBox="0 -5 10 10"
+                refX="10"
+                refY="0"
+                markerWidth="6"
+                markerHeight="6"
+                orient="auto"
+              >
+                <path d="M0,-5L10,0L0,5" fill="#3fb950" />
+              </marker>
+            </defs>
+          </svg>
+          <div id="overview-grid"></div>
+        </div>
+      </section>
 
-  <section data-view="switchboard" class="view active">
-  <div class="switchboard-wrap">
-    <svg id="cross-call-overlay" class="cross-overlay" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <marker id="arrow-blue" viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,-5L10,0L0,5" fill="#58a6ff"/></marker>
-        <marker id="arrow-yellow" viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,-5L10,0L0,5" fill="#d29922"/></marker>
-        <marker id="arrow-green" viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,-5L10,0L0,5" fill="#3fb950"/></marker>
-      </defs>
-    </svg>
-    <div id="overview-grid"></div>
-  </div>
-  </section>
+      <section data-view="session-detail" class="view" hidden>
+        <div class="detail-header">
+          <button id="detail-drawer-toggle" class="drawer-btn" title="Agents">≡</button>
+          <button id="detail-back" class="back-btn" title="Back to Switchboard">‹</button>
+          <span class="state-pill" id="detail-state"></span>
+          <h2 id="detail-name"></h2>
+          <div class="detail-meta">
+            <span id="detail-cwd"></span>
+            <span id="detail-model"></span>
+            <span id="detail-ctx"></span>
+            <span id="detail-host"></span>
+          </div>
+        </div>
+        <div class="detail-body">
+          <aside class="detail-sidebar" id="detail-sidebar">
+            <div class="sidebar-label">AGENTS</div>
+            <ul id="detail-tree"></ul>
+          </aside>
+          <main class="detail-stream" id="detail-stream"></main>
+          <button
+            type="button"
+            class="scroll-to-bottom"
+            id="scroll-to-bottom"
+            hidden
+            aria-label="Scroll to latest"
+          >
+            ↓ New
+          </button>
+        </div>
+        <form
+          class="detail-send"
+          id="detail-send"
+          onsubmit="
+            event.preventDefault()
+            doDetailSend()
+          "
+        >
+          <textarea
+            id="detail-send-msg"
+            class="msg"
+            placeholder="Message this session..."
+            rows="1"
+            autocomplete="off"
+          ></textarea>
+          <button type="submit">Send</button>
+        </form>
+      </section>
 
-  <section data-view="session-detail" class="view" hidden>
-    <div class="detail-header">
-      <button id="detail-drawer-toggle" class="drawer-btn" title="Agents">≡</button>
-      <button id="detail-back" class="back-btn" title="Back to Switchboard">‹</button>
-      <span class="state-pill" id="detail-state"></span>
-      <h2 id="detail-name"></h2>
-      <div class="detail-meta">
-        <span id="detail-cwd"></span>
-        <span id="detail-model"></span>
-        <span id="detail-ctx"></span>
-        <span id="detail-host"></span>
+      <section data-view="history" class="view" hidden>
+        <nav class="subtabs" id="history-subtabs">
+          <button data-subtab="events" class="active">Events</button>
+          <button data-subtab="bus">Bus</button>
+        </nav>
+        <div class="subview" data-subview="events">
+          <div class="history-controls">
+            <input type="search" id="history-filter" placeholder="Filter events..." />
+            <select id="history-hook-filter">
+              <option value="">All hooks</option>
+            </select>
+          </div>
+          <ul id="history-list"></ul>
+        </div>
+        <div class="subview" data-subview="bus" hidden>
+          <div class="bus-feed-wrap">
+            <div class="feed-controls"><span id="busMsgCount">0 messages</span></div>
+            <div class="feed" id="busFeed"></div>
+            <form
+              class="send-bar"
+              id="busSend"
+              onsubmit="
+                event.preventDefault()
+                doBusSend()
+              "
+            >
+              <label>To:</label>
+              <input class="to" id="busSendTo" placeholder="session or all" value="all" />
+              <label>Type:</label>
+              <select id="busSendType">
+                <option value="message">message</option>
+                <option value="request">request</option>
+                <option value="status">status</option>
+              </select>
+              <input class="msg" id="busSendMsg" placeholder="Type a message..." />
+              <button type="submit">Send</button>
+            </form>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="ctx-menu" id="ctxMenu"></div>
+    <div class="modal-overlay" id="modalOverlay">
+      <div class="modal">
+        <div class="modal-header">
+          <h3 id="modalTitle">Session</h3>
+          <button class="modal-close" id="modalClose">&times;</button>
+        </div>
+        <div class="modal-meta" id="modalMeta"></div>
+        <div class="modal-body" id="modalBody"></div>
       </div>
     </div>
-    <div class="detail-body">
-      <aside class="detail-sidebar" id="detail-sidebar">
-        <div class="sidebar-label">AGENTS</div>
-        <ul id="detail-tree"></ul>
-      </aside>
-      <main class="detail-stream" id="detail-stream"></main>
-      <button type="button" class="scroll-to-bottom" id="scroll-to-bottom" hidden aria-label="Scroll to latest">↓ New</button>
-    </div>
-    <form class="detail-send" id="detail-send" onsubmit="event.preventDefault(); doDetailSend();">
-      <textarea id="detail-send-msg" class="msg" placeholder="Message this session..." rows="1" autocomplete="off"></textarea>
-      <button type="submit">Send</button>
-    </form>
-  </section>
 
-<section data-view="history" class="view" hidden>
-  <nav class="subtabs" id="history-subtabs">
-    <button data-subtab="events" class="active">Events</button>
-    <button data-subtab="bus">Bus</button>
-  </nav>
-  <div class="subview" data-subview="events">
-    <div class="history-controls">
-      <input type="search" id="history-filter" placeholder="Filter events...">
-      <select id="history-hook-filter"><option value="">All hooks</option></select>
-    </div>
-    <ul id="history-list"></ul>
-  </div>
-  <div class="subview" data-subview="bus" hidden>
-    <div class="bus-feed-wrap">
-      <div class="feed-controls"><span id="busMsgCount">0 messages</span></div>
-      <div class="feed" id="busFeed"></div>
-      <form class="send-bar" id="busSend" onsubmit="event.preventDefault(); doBusSend();">
-        <label>To:</label>
-        <input class="to" id="busSendTo" placeholder="session or all" value="all">
-        <label>Type:</label>
-        <select id="busSendType">
-          <option value="message">message</option>
-          <option value="request">request</option>
-          <option value="status">status</option>
-        </select>
-        <input class="msg" id="busSendMsg" placeholder="Type a message...">
-        <button type="submit">Send</button>
-      </form>
-    </div>
-  </div>
-</section>
-
-</div>
-
-<div class="ctx-menu" id="ctxMenu"></div>
-<div class="modal-overlay" id="modalOverlay">
-  <div class="modal">
-    <div class="modal-header">
-      <h3 id="modalTitle">Session</h3>
-      <button class="modal-close" id="modalClose">&times;</button>
-    </div>
-    <div class="modal-meta" id="modalMeta"></div>
-    <div class="modal-body" id="modalBody"></div>
-  </div>
-</div>
-
-<script src="/vendor/marked.min.js"></script>
-<script src="/vendor/purify.min.js"></script>
-<script src="/dashboard.js"></script>
-</body>
+    <script src="/vendor/marked.min.js"></script>
+    <script src="/vendor/purify.min.js"></script>
+    <script type="module" src="/dashboard.js"></script>
+  </body>
 </html>
