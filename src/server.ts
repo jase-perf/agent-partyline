@@ -185,6 +185,16 @@ function handleInbound(envelope: Envelope): void {
   // Only deliver user-initiated messages — filter out presence protocol traffic
   if (envelope.type === 'heartbeat' || envelope.type === 'announce') return
 
+  // Permission envelopes use a dedicated MCP notification path, not claude/channel.
+  if (envelope.type === 'permission-response' && envelope.to === sessionName) {
+    permissionBridge.handlePermissionResponseEnvelope(envelope)
+    return
+  }
+  if (envelope.type === 'permission-request') {
+    // permission-request envelopes are for the dashboard, not other sessions
+    return
+  }
+
   const isForUs =
     envelope.to === sessionName ||
     envelope.to === 'all' ||
