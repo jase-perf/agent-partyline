@@ -94,7 +94,8 @@ bin/
 
 ```bash
 # Dashboard (web + multicast listener)
-bun dashboard/serve.ts [--port 3400] [--name dashboard]
+bun dashboard/serve.ts [--port 3400] [--name dashboard] \
+  [--cert cert.pem --key key.pem]   # optional: speak HTTPS/WSS. Also via PARTY_LINE_TLS_CERT/KEY env.
 
 # CLI
 bun dashboard/cli.ts watch              # tail messages

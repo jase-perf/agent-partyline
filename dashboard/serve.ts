@@ -6,6 +6,11 @@
  *
  * Usage:
  *   bun dashboard/serve.ts [--port 3400] [--name dashboard]
+ *                          [--cert path/to/cert.pem --key path/to/key.pem]
+ *
+ * TLS can also be enabled via env: PARTY_LINE_TLS_CERT, PARTY_LINE_TLS_KEY.
+ * When both cert and key are present, the server speaks HTTPS/WSS instead
+ * of HTTP/WS. Default remains plain HTTP.
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
@@ -43,6 +48,8 @@ function getArg(flag: string, fallback: string): string {
 
 const PORT = parseInt(getArg('--port', '3400'), 10)
 const NAME = getArg('--name', 'dashboard')
+const TLS_CERT_PATH = getArg('--cert', process.env.PARTY_LINE_TLS_CERT ?? '')
+const TLS_KEY_PATH = getArg('--key', process.env.PARTY_LINE_TLS_KEY ?? '')
 
 // --- Context overrides config ---
 
@@ -174,8 +181,23 @@ const notificationsJs = readFileSync(join(__dirname, 'notifications.js'), 'utf-8
 
 // --- Server ---
 
+function loadTls(): { cert: string; key: string } | undefined {
+  if (!TLS_CERT_PATH || !TLS_KEY_PATH) return undefined
+  try {
+    const cert = readFileSync(TLS_CERT_PATH, 'utf-8')
+    const key = readFileSync(TLS_KEY_PATH, 'utf-8')
+    return { cert, key }
+  } catch (err) {
+    console.error(`[serve] Failed to load TLS cert/key: ${String(err)}`)
+    console.error('[serve] Falling back to plain HTTP.')
+    return undefined
+  }
+}
+const tls = loadTls()
+
 const server = Bun.serve({
   port: PORT,
+  ...(tls ? { tls } : {}),
   fetch(req, server) {
     const url = new URL(req.url)
 
@@ -463,9 +485,10 @@ async function main(): Promise<void> {
     console.error('  Warning: retention/rollup failed:', err)
   }
 
-  console.log(`Party Line Dashboard`)
-  console.log(`  Web UI:   http://localhost:${PORT}`)
-  console.log(`  Ingest:   http://localhost:${PORT}/ingest`)
+  const proto = tls ? 'https' : 'http'
+  console.log(`Party Line Dashboard${tls ? ' (TLS)' : ''}`)
+  console.log(`  Web UI:   ${proto}://localhost:${PORT}`)
+  console.log(`  Ingest:   ${proto}://localhost:${PORT}/ingest`)
   console.log(`  Token:    ${TOKEN_PATH}`)
   console.log(`  DB:       ${DB_PATH}`)
   console.log(`  Machine:  ${machineId}`)
