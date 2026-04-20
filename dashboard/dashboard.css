@@ -760,7 +760,7 @@
   cursor: pointer;
   font-weight: 600;
 }
-.detail-send input, .detail-send select {
+.detail-send input, .detail-send select, .detail-send textarea {
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--text);
@@ -769,10 +769,20 @@
   font-family: inherit;
   font-size: 12px;
 }
-.detail-send input:focus, .detail-send select:focus {
+.detail-send input:focus, .detail-send select:focus, .detail-send textarea:focus {
   outline: none;
   border-color: var(--accent);
 }
+/* Session send box: multi-line textarea that auto-grows up to ~4 lines. */
+.detail-send textarea.msg {
+  flex: 1;
+  resize: none;
+  min-height: 32px;
+  max-height: 120px;
+  line-height: 1.5;
+  overflow-y: auto;
+}
+.detail-send { align-items: flex-end; }
 
 .entry { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px dashed #21262d; }
 .entry-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }

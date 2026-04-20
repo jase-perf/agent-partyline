@@ -1340,7 +1340,8 @@ function appendPartyLineEntry(wrap, e) {
 
 function doDetailSend() {
   if (!selectedSessionId) return;
-  const msg = document.getElementById('detail-send-msg').value.trim();
+  const textarea = document.getElementById('detail-send-msg');
+  const msg = textarea.value.trim();
   if (!msg) return;
   ws.send(JSON.stringify({
     action: 'send',
@@ -1348,9 +1349,34 @@ function doDetailSend() {
     message: msg,
     type: 'message',
   }));
-  document.getElementById('detail-send-msg').value = '';
-  document.getElementById('detail-send-msg').focus();
+  textarea.value = '';
+  autosizeDetailSend();
+  textarea.focus();
 }
+
+// Auto-resize the session send textarea up to ~4 lines, then scroll.
+function autosizeDetailSend() {
+  const ta = document.getElementById('detail-send-msg');
+  if (!ta) return;
+  ta.style.height = 'auto';
+  const max = 4 * parseFloat(getComputedStyle(ta).lineHeight || '20') + 16;
+  ta.style.height = Math.min(ta.scrollHeight, max) + 'px';
+}
+
+// Wire textarea behaviors once.
+(function wireDetailSend() {
+  const ta = document.getElementById('detail-send-msg');
+  if (!ta) return;
+  ta.addEventListener('input', autosizeDetailSend);
+  ta.addEventListener('keydown', (e) => {
+    // Enter inserts a newline (default textarea behavior); Ctrl+Enter or
+    // Cmd+Enter sends. The Send button works on any device.
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+      e.preventDefault();
+      doDetailSend();
+    }
+  });
+})();
 
 // --- History view ---
 
@@ -1558,29 +1584,26 @@ applyRoute(parseUrl(), { skipPush: true });
 // On iOS Safari the on-screen keyboard is an overlay that does not affect
 // 100dvh, so a sticky-positioned send bar ends up behind the keyboard and the
 // user sees empty padding after the keyboard dismisses. Track the visual
-// viewport and resize the body to match, plus scroll the focused input into
-// view when it gains focus.
+// viewport and resize the body to match. Preserve stream scroll position
+// across the resize so the user doesn't get yanked to the top.
 if (window.visualViewport) {
   const vv = window.visualViewport;
   function updateViewportHeight() {
-    // Pin body to the visual viewport's reported height.
+    // Record stream scroll bottom-distance before the resize changes heights.
+    const stream = document.getElementById('detail-stream');
+    const bottomDist = stream ? (stream.scrollHeight - stream.scrollTop - stream.clientHeight) : null;
     document.body.style.height = vv.height + 'px';
+    // Restore relative bottom-anchor after reflow.
+    if (stream && bottomDist !== null && bottomDist < 80) {
+      // User was near bottom → keep them there as heights shift.
+      requestAnimationFrame(() => {
+        stream.scrollTop = stream.scrollHeight - stream.clientHeight;
+      });
+    }
   }
   vv.addEventListener('resize', updateViewportHeight);
   vv.addEventListener('scroll', updateViewportHeight);
   updateViewportHeight();
 }
-
-// When the user taps the send input, scroll the bottom of the stream into view
-// after the keyboard settles.
-document.addEventListener('focusin', (e) => {
-  const el = e.target;
-  if (!el || typeof el.matches !== 'function') return;
-  if (!el.matches('#detail-send-msg, #busSendMsg, #history-filter')) return;
-  // Give the keyboard ~200ms to animate in, then scroll.
-  setTimeout(() => {
-    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }, 200);
-});
 
 connect();
