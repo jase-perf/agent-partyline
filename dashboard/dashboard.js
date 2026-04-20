@@ -12,6 +12,7 @@ let contextOverrides = {}
 let lastSessions = []
 let sessionsReady = false
 let pendingRouteState = null // if set, applyRoute will re-fire once sessions arrive
+var sessionRevisions = new Map() // name -> last applied revision (from /ws/observer session-delta stream)
 
 // Service Worker registration promise. Used by notifications.js to call
 // registration.showNotification(). Null if SW isn't supported (e.g. non-secure
@@ -262,83 +263,94 @@ function esc(s) {
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  ws = new WebSocket(proto + '//' + location.host + '/ws')
+  ws = new WebSocket(proto + '//' + location.host + '/ws/observer')
 
   ws.onopen = function () {
     connStatus.textContent = 'connected'
     connStatus.style.color = '#3fb950'
   }
 
-  ws.onclose = function () {
+  ws.onclose = function (e) {
+    // Auth failure (1006 abnormal close during handshake, or 4401) → redirect to login.
+    if (e.code === 1006 || e.code === 4401) {
+      var nextPath = location.pathname + location.hash
+      location.href = '/login?next=' + encodeURIComponent(nextPath)
+      return
+    }
     connStatus.textContent = 'disconnected \u2014 reconnecting...'
     connStatus.style.color = '#f85149'
     setTimeout(connect, 2000)
   }
 
   ws.onmessage = function (e) {
-    var data = JSON.parse(e.data)
-    if (data.type === 'sessions') updateSessions(data.data)
-    else if (data.type === 'message') {
-      addMessage(data.data)
-      addMessageToBus(data.data)
-      if (data.data.to && data.data.to !== 'all') bumpUnread(data.data.to)
+    var data
+    try {
+      data = JSON.parse(e.data)
+    } catch (err) {
+      return
+    }
+
+    if (data.type === 'sessions-snapshot') {
+      handleSessionsSnapshot(data.sessions)
+    } else if (data.type === 'session-delta') {
+      applySessionDelta(data)
+    } else if (data.type === 'envelope') {
+      // Adapt switchboard wire shape (envelope_type) back to legacy shape (type)
+      // so existing renderers keep working.
+      var adapted = {
+        id: data.id,
+        ts: new Date(data.ts).toISOString(),
+        from: data.from,
+        to: data.to,
+        type: data.envelope_type,
+        body: data.body == null ? '' : data.body,
+        callback_id: data.callback_id,
+        response_to: data.response_to,
+      }
+      addMessage(adapted)
+      addMessageToBus(adapted)
+      if (adapted.to && adapted.to !== 'all') bumpUnread(adapted.to)
       try {
-        notif.onPartyLineMessage(data.data)
+        notif.onPartyLineMessage(adapted)
       } catch (err) {
         console.error('[notifications] onPartyLineMessage threw', err)
       }
-      // Live-append to the session-detail stream without re-fetching the
-      // full transcript (instant feedback for sent + received messages).
       if (
         currentView === 'session-detail' &&
         selectedSessionId &&
-        (data.data.from === selectedSessionId || data.data.to === selectedSessionId)
+        (adapted.from === selectedSessionId || adapted.to === selectedSessionId)
       ) {
-        appendEnvelopeToStream(data.data)
+        appendEnvelopeToStream(adapted)
       }
-    } else if (data.type === 'quota') updateQuota(data.data)
-    else if (data.type === 'overrides') {
-      contextOverrides = data.data
-      updateSessions(lastSessions)
-    } else if (data.type === 'session-update') {
-      handleSessionUpdate(data.data)
-      bumpUnread(data.data.name)
+    } else if (data.type === 'permission-request') {
       try {
-        notif.onSessionUpdate(data.data)
-      } catch (err) {
-        console.error('[notifications] onSessionUpdate threw', err)
-      }
-    } else if (data.type === 'jsonl') {
-      handleJsonlEvent(data.data)
-      bumpUnread(resolveNameFromJsonlPath(data.data.file_path) || data.data.session_id)
-    } else if (data.type === 'hook-event') {
-      handleHookEvent(data.data)
-      // Check if this is a SessionStart from compaction — if so, force a full
-      // transcript re-fetch for the currently-viewed session.
-      maybeHandleCompactForCurrentView(data.data)
-    } else if (data.type === 'stream-reset') handleStreamReset(data.data)
-    else if (data.type === 'cross-call') handleCrossCall(data.data)
-    else if (data.type === 'permission-request') {
-      try {
-        notif.onPermissionRequest(data.data)
+        notif.onPermissionRequest(data.data || data)
       } catch (err) {
         console.error('[notifications] onPermissionRequest threw', err)
       }
-      renderPermissionCard(data.data)
+      renderPermissionCard(data.data || data)
     } else if (data.type === 'permission-resolved') {
       try {
-        notif.onPermissionResolved(data.data)
+        notif.onPermissionResolved(data.data || data)
       } catch (err) {
         console.error('[notifications] onPermissionResolved threw', err)
       }
-      updatePermissionCardResolved(data.data)
+      updatePermissionCardResolved(data.data || data)
     } else if (data.type === 'notification-dismiss') {
       try {
-        notif.onNotificationDismiss(data.data)
+        notif.onNotificationDismiss(data)
       } catch (err) {
         console.error('[notifications] onNotificationDismiss threw', err)
       }
+    } else if (data.type === 'quota') {
+      updateQuota(data.data)
+    } else if (data.type === 'overrides') {
+      contextOverrides = data.data
+      updateSessions(lastSessions)
     }
+    // Old frame types (sessions, session-update, jsonl, hook-event, stream-reset, cross-call)
+    // are no longer emitted by /ws/observer. Handlers kept as no-ops for any remaining
+    // bootstrap callers.
   }
 }
 
@@ -545,6 +557,66 @@ function updateSessions(sessions) {
   }
 }
 
+// --- /ws/observer session-delta handlers ---
+
+function handleSessionsSnapshot(sessions) {
+  // The observer snapshot has minimal data — adapt it to the lastSessions shape
+  // the existing card renderers expect.
+  var adapted = sessions.map(function (s) {
+    return {
+      name: s.name,
+      lastSeen: Date.now(), // observer doesn't track heartbeats; assume live
+      metadata: {
+        status: {
+          state: s.online ? 'idle' : 'ended',
+          sessionId: s.cc_session_uuid,
+        },
+      },
+    }
+  })
+  sessionRevisions.clear()
+  sessions.forEach(function (s) {
+    sessionRevisions.set(s.name, s.revision)
+  })
+  updateSessions(adapted)
+}
+
+function applySessionDelta(delta) {
+  var prior = sessionRevisions.has(delta.session) ? sessionRevisions.get(delta.session) : -1
+  if (delta.revision <= prior) return
+  sessionRevisions.set(delta.session, delta.revision)
+
+  var row = null
+  for (var i = 0; i < lastSessions.length; i++) {
+    if (lastSessions[i].name === delta.session) {
+      row = lastSessions[i]
+      break
+    }
+  }
+  if (!row) {
+    row = { name: delta.session, metadata: { status: {} } }
+    lastSessions.push(row)
+  }
+  var md = (row.metadata = row.metadata || {})
+  var status = (md.status = md.status || {})
+  var c = delta.changes || {}
+  if ('online' in c) status.state = c.online ? 'idle' : 'ended'
+  if ('cc_session_uuid' in c) status.sessionId = c.cc_session_uuid
+  if ('state' in c) status.state = c.state
+  if ('current_tool' in c) status.currentTool = c.current_tool
+  if ('last_text' in c) status.lastText = c.last_text
+  if ('context_tokens' in c) status.contextTokens = c.context_tokens
+
+  updateOverviewGrid(lastSessions)
+  if (currentView === 'session-detail' && selectedSessionId === delta.session) {
+    try {
+      if (typeof renderDetailHeader === 'function') renderDetailHeader(row)
+    } catch (err) {
+      /* ignore */
+    }
+  }
+}
+
 function addMessage(msg) {
   totalMessages++
   var busMsgCount = document.getElementById('busMsgCount')
@@ -610,7 +682,13 @@ function doBusSend() {
   const msg = document.getElementById('busSendMsg').value.trim()
   const type = document.getElementById('busSendType').value
   if (!to || !msg) return
-  ws.send(JSON.stringify({ action: 'send', to, message: msg, type }))
+  fetch('/api/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ to, message: msg, type }),
+  }).catch(function (err) {
+    console.error('[bus] send failed', err)
+  })
   document.getElementById('busSendMsg').value = ''
 }
 
@@ -1725,14 +1803,13 @@ function doDetailSend() {
   const textarea = document.getElementById('detail-send-msg')
   const msg = textarea.value.trim()
   if (!msg) return
-  ws.send(
-    JSON.stringify({
-      action: 'send',
-      to: selectedSessionId,
-      message: msg,
-      type: 'message',
-    }),
-  )
+  fetch('/api/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ to: selectedSessionId, message: msg, type: 'message' }),
+  }).catch(function (err) {
+    console.error('[detail-send] send failed', err)
+  })
   textarea.value = ''
   autosizeDetailSend()
   textarea.focus()
@@ -2343,5 +2420,33 @@ function maybeShowIosInstallHint() {
 }
 
 maybeShowIosInstallHint()
+
+// /ws/observer does NOT push quota or overrides on connect — fetch initial
+// state via REST so the UI is populated before (and regardless of) the
+// periodic broadcast that serve.ts sends.
+fetch('/api/overrides')
+  .then(function (r) {
+    return r.ok ? r.json() : null
+  })
+  .then(function (data) {
+    if (data) {
+      contextOverrides = data
+      if (lastSessions.length > 0) updateSessions(lastSessions)
+    }
+  })
+  .catch(function () {
+    /* ignore */
+  })
+
+fetch('/api/quota')
+  .then(function (r) {
+    return r.ok ? r.json() : null
+  })
+  .then(function (data) {
+    if (data && !data.error) updateQuota(data)
+  })
+  .catch(function () {
+    /* ignore */
+  })
 
 connect()

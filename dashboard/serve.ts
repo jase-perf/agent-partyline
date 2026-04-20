@@ -199,6 +199,7 @@ setInterval(() => {
   for (const ws of wsClients) {
     ws.send(json)
   }
+  switchboard.broadcastObserverFrame({ type: 'quota', data: quota })
 }, 30_000)
 
 // --- HTML ---
@@ -391,6 +392,7 @@ const server = Bun.serve({
         const overrides = loadOverrides()
         overrides[body.session] = { contextLimit: body.contextLimit }
         saveOverrides(overrides)
+        switchboard.broadcastObserverFrame({ type: 'overrides', data: overrides })
         return Response.json({ ok: true })
       })()
     }
@@ -405,6 +407,7 @@ const server = Bun.serve({
         const overrides = loadOverrides()
         delete overrides[body.session]
         saveOverrides(overrides)
+        switchboard.broadcastObserverFrame({ type: 'overrides', data: overrides })
         return Response.json({ ok: true })
       })()
     }
