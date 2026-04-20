@@ -2,8 +2,12 @@
  * server.ts — Party Line MCP channel server.
  *
  * Main entry point. Sets up the MCP server with channel capability,
- * starts the UDP multicast transport, and registers tools for
- * inter-session messaging.
+ * dials the party-line switchboard over WebSocket, and registers tools
+ * for inter-session messaging.
+ *
+ * In Phase C, the plugin is a thin WS client to the switchboard. The
+ * session name is pinned at registration (via `ccpl new <name>`), and
+ * the `PARTY_LINE_TOKEN` env var authenticates the connection.
  */
 
 import { basename } from 'node:path'
@@ -12,11 +16,11 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
-import { UdpMulticastTransport } from './transport/udp-multicast.js'
-import { PresenceTracker } from './presence.js'
-import { createEnvelope, generateCallbackId } from './protocol.js'
+import { createWsClient } from './transport/ws-client.js'
+import { generateId, generateCallbackId } from './protocol.js'
 import { getSessionStatus } from './introspect.js'
 import { createPermissionBridge } from './permission-bridge.js'
+import { getMachineId } from './machine-id.js'
 import type { Envelope, MessageType } from './types.js'
 
 // --- Session name resolution ---
@@ -70,7 +74,7 @@ function resolveSessionName(): string {
   return `${dir}-${process.pid}`
 }
 
-let sessionName = resolveSessionName()
+const sessionName = resolveSessionName()
 
 // --- Debug logging ---
 
@@ -93,23 +97,60 @@ function recordMessage(envelope: Envelope): void {
   }
 }
 
-// --- Transport + Presence ---
+// --- Switchboard connection (WS client) ---
 
-const transport = new UdpMulticastTransport(sessionName)
-const presence = new PresenceTracker(transport, sessionName, {
-  description: `Claude Code session: ${sessionName}`,
-})
+const PARTY_LINE_VERSION = '0.1.0'
+const SWITCHBOARD_URL = process.env.PARTY_LINE_SWITCHBOARD_URL || 'wss://localhost:3400/ws/session'
+const token = process.env.PARTY_LINE_TOKEN || null
 
-// Enrich heartbeats with live session status from JSONL introspection
-presence.setStatusProvider(() => {
-  const status = getSessionStatus()
-  return status ?? undefined
-})
+function ccplBaseUrl(): string {
+  return SWITCHBOARD_URL.replace(/^wss?:\/\//, (m) =>
+    m === 'wss://' ? 'https://' : 'http://',
+  ).replace(/\/ws\/.*$/, '')
+}
+
+// Best-effort machine_id for the hello payload (ignore failures).
+let machineId: string | null = null
+try {
+  const mpath = (process.env.HOME ?? '/home/claude') + '/.config/party-line/machine-id'
+  machineId = getMachineId(mpath)
+} catch {
+  /* ignore — hello payload accepts null */
+}
+
+/** Cached Claude Code session UUID from JSONL introspection (may be null). */
+function currentCcUuid(): string | null {
+  return getSessionStatus()?.sessionId ?? null
+}
+
+const ws = token
+  ? createWsClient({
+      url: SWITCHBOARD_URL,
+      helloPayload: {
+        type: 'hello',
+        token,
+        name: sessionName,
+        cc_session_uuid: currentCcUuid(),
+        pid: process.pid,
+        machine_id: machineId,
+        version: PARTY_LINE_VERSION,
+      },
+      logger: (lvl, msg) => {
+        if (lvl === 'error' || DEBUG) {
+          process.stderr.write(`[party-line:ws:${lvl}] ${msg}\n`)
+        }
+      },
+    })
+  : null
+
+if (!ws) {
+  debug('PARTY_LINE_TOKEN not set — running in degraded mode (tools will error)')
+}
 
 // --- MCP Server ---
 
 const mcp = new Server(
-  { name: 'party-line', version: '0.1.0' },
+  { name: 'party-line', version: PARTY_LINE_VERSION },
   {
     capabilities: {
       experimental: {
@@ -119,7 +160,7 @@ const mcp = new Server(
       tools: {},
     },
     instructions: [
-      `The party-line channel connects this session to other Claude Code sessions on the same machine via UDP multicast.`,
+      `The party-line channel connects this session to other Claude Code sessions on the same machine via the party-line switchboard.`,
       `This session is registered as "${sessionName}".`,
       ``,
       `Messages from other sessions arrive as <channel source="party-line" from="..." to="..." type="...">body</channel> tags.`,
@@ -140,12 +181,28 @@ const mcp = new Server(
   },
 )
 
-// --- Permission bridge (MCP ↔ UDP for claude/channel/permission) ---
+// --- Permission bridge (MCP ↔ WS for claude/channel/permission) ---
 
 const permissionBridge = createPermissionBridge({
   sessionName,
   sendEnvelope: (envelope) => {
-    void transport.send(envelope)
+    // Forward permission envelopes to the switchboard as `send` frames so
+    // they reach the dashboard/observer surface. Silently drop if we have
+    // no live WS (no token or not yet connected).
+    if (!ws || !ws.isConnected()) return
+    try {
+      ws.send({
+        type: 'send',
+        to: envelope.to,
+        frame_type: envelope.type,
+        body: envelope.body,
+        callback_id: envelope.callback_id ?? undefined,
+        response_to: envelope.response_to ?? undefined,
+        client_ref: envelope.id,
+      })
+    } catch {
+      /* ignore — socket raced a close */
+    }
   },
   sendMcpNotification: ({ request_id, behavior }) => {
     void mcp.notification({
@@ -170,17 +227,23 @@ mcp.setNotificationHandler(
   },
 )
 
-// --- Handle inbound messages ---
+// --- Handle inbound envelope frames from the switchboard ---
+
+interface InboundEnvelopeFrame {
+  type: 'envelope'
+  id: string
+  ts: number
+  from: string
+  to: string
+  envelope_type: string
+  body: string | null
+  callback_id: string | null
+  response_to: string | null
+}
 
 function handleInbound(envelope: Envelope): void {
-  // Track presence from all messages
-  presence.handleMessage(envelope)
-
-  // Record all traffic for history
+  // Record all inbound traffic for the history tool.
   recordMessage(envelope)
-
-  // Only deliver user-initiated messages — filter out presence protocol traffic
-  if (envelope.type === 'heartbeat' || envelope.type === 'announce') return
 
   // Permission envelopes use a dedicated MCP notification path, not claude/channel.
   if (envelope.type === 'permission-response' && envelope.to === sessionName) {
@@ -188,10 +251,12 @@ function handleInbound(envelope: Envelope): void {
     return
   }
   if (envelope.type === 'permission-request') {
-    // permission-request envelopes are for the dashboard, not other sessions
+    // permission-request envelopes are for the dashboard, not other sessions.
     return
   }
 
+  // The switchboard routes only envelopes addressed to us (or broadcast),
+  // but double-check so we don't surface stray frames.
   const isForUs =
     envelope.to === sessionName ||
     envelope.to === 'all' ||
@@ -222,6 +287,22 @@ function handleInbound(envelope: Envelope): void {
   })
 }
 
+ws?.on('envelope', (frame: InboundEnvelopeFrame) => {
+  // Adapt the switchboard wire frame (envelope_type) to the internal
+  // Envelope shape (type) so downstream code can stay as-is.
+  const adapted: Envelope = {
+    id: frame.id,
+    from: frame.from,
+    to: frame.to,
+    type: frame.envelope_type as MessageType,
+    body: frame.body ?? '',
+    callback_id: frame.callback_id,
+    response_to: frame.response_to,
+    ts: new Date(frame.ts).toISOString(),
+  }
+  handleInbound(adapted)
+})
+
 // --- Tool definitions ---
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -229,7 +310,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'party_line_set_name',
       description:
-        'Set a human-readable name for this session on the party line. Choose a short, descriptive name based on your role (e.g. "discord", "research", "project-myapp").',
+        'Set a human-readable name for this session on the party line. NOTE: Disabled under the switchboard model — session names are pinned at ccpl registration.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -302,7 +383,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'party_line_list_sessions',
-      description: 'List all Claude Code sessions currently connected to the party line.',
+      description: 'List Claude Code sessions currently connected to the party line.',
       inputSchema: {
         type: 'object' as const,
         properties: {},
@@ -324,6 +405,33 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
   ],
 }))
 
+/** Fetch the caller's own session row from the switchboard.
+ *
+ * Until the switchboard exposes a token-authed listing endpoint, the plugin
+ * can only authenticate itself for its own name. Returns an empty array if
+ * the request fails or no token is set.
+ */
+async function fetchSessions(): Promise<
+  Array<{ name: string; online: boolean; cc_session_uuid: string | null; cwd: string }>
+> {
+  if (!token) return []
+  try {
+    const res = await fetch(ccplBaseUrl() + '/ccpl/session/' + encodeURIComponent(sessionName), {
+      headers: { 'X-Party-Line-Token': token },
+    })
+    if (!res.ok) return []
+    const row = (await res.json()) as {
+      name: string
+      cwd: string
+      cc_session_uuid: string | null
+      online: boolean
+    }
+    return [row]
+  } catch {
+    return []
+  }
+}
+
 mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params
 
@@ -334,12 +442,43 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!to || !message) {
         return { content: [{ type: 'text', text: 'Error: "to" and "message" are required.' }] }
       }
+      if (!ws) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Error: PARTY_LINE_TOKEN not set. Use ccpl to launch this session.',
+            },
+          ],
+        }
+      }
+      if (!ws.isConnected()) {
+        return { content: [{ type: 'text', text: 'Error: switchboard unreachable.' }] }
+      }
 
-      const envelope = createEnvelope(sessionName, to, 'message', message)
-      await transport.send(envelope)
-      recordMessage(envelope)
-      debug(`send: to=${to} id=${envelope.id}`)
-      return { content: [{ type: 'text', text: `Sent message to "${to}" (id: ${envelope.id}).` }] }
+      const clientRef = generateId()
+      ws.send({
+        type: 'send',
+        to,
+        frame_type: 'message',
+        body: message,
+        client_ref: clientRef,
+      })
+      // Optimistic local history entry so party_line_history reflects sends.
+      recordMessage({
+        id: clientRef,
+        from: sessionName,
+        to,
+        type: 'message',
+        body: message,
+        callback_id: null,
+        response_to: null,
+        ts: new Date().toISOString(),
+      })
+      debug(`send: to=${to} client_ref=${clientRef}`)
+      return {
+        content: [{ type: 'text', text: `Sent message to "${to}" (client_ref: ${clientRef}).` }],
+      }
     }
 
     case 'party_line_request': {
@@ -348,12 +487,41 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!to || !message) {
         return { content: [{ type: 'text', text: 'Error: "to" and "message" are required.' }] }
       }
+      if (!ws) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Error: PARTY_LINE_TOKEN not set. Use ccpl to launch this session.',
+            },
+          ],
+        }
+      }
+      if (!ws.isConnected()) {
+        return { content: [{ type: 'text', text: 'Error: switchboard unreachable.' }] }
+      }
 
       const callbackId = generateCallbackId()
-      const envelope = createEnvelope(sessionName, to, 'request', message, callbackId)
-      await transport.send(envelope)
-      recordMessage(envelope)
-      debug(`request: to=${to} callback=${callbackId} id=${envelope.id}`)
+      const clientRef = generateId()
+      ws.send({
+        type: 'send',
+        to,
+        frame_type: 'request',
+        body: message,
+        callback_id: callbackId,
+        client_ref: clientRef,
+      })
+      recordMessage({
+        id: clientRef,
+        from: sessionName,
+        to,
+        type: 'request',
+        body: message,
+        callback_id: callbackId,
+        response_to: null,
+        ts: new Date().toISOString(),
+      })
+      debug(`request: to=${to} callback=${callbackId} client_ref=${clientRef}`)
       return {
         content: [
           {
@@ -375,39 +543,76 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
           ],
         }
       }
+      if (!ws) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Error: PARTY_LINE_TOKEN not set. Use ccpl to launch this session.',
+            },
+          ],
+        }
+      }
+      if (!ws.isConnected()) {
+        return { content: [{ type: 'text', text: 'Error: switchboard unreachable.' }] }
+      }
 
-      const envelope = createEnvelope(sessionName, to, 'response', message, null, callbackId)
-      await transport.send(envelope)
-      recordMessage(envelope)
-      debug(`respond: to=${to} callback=${callbackId} id=${envelope.id}`)
+      const clientRef = generateId()
+      ws.send({
+        type: 'respond',
+        to,
+        frame_type: 'response',
+        body: message,
+        callback_id: callbackId,
+        response_to: callbackId,
+        client_ref: clientRef,
+      })
+      recordMessage({
+        id: clientRef,
+        from: sessionName,
+        to,
+        type: 'response',
+        body: message,
+        callback_id: callbackId,
+        response_to: callbackId,
+        ts: new Date().toISOString(),
+      })
+      debug(`respond: to=${to} callback=${callbackId} client_ref=${clientRef}`)
       return { content: [{ type: 'text', text: `Response sent to "${to}".` }] }
     }
 
     case 'party_line_list_sessions': {
-      const sessions = presence.listSessions()
-      if (sessions.length === 0) {
-        return { content: [{ type: 'text', text: 'No sessions currently registered.' }] }
-      }
-      const lines = sessions.map((s) => {
-        const isSelf = s.name === sessionName ? ' (this session)' : ''
-        const status = s.metadata?.status
-        if (status) {
-          const stateIcon =
-            status.state === 'working' ? '🔄' : status.state === 'idle' ? '💤' : '❓'
-          const branch = status.gitBranch ? ` [${status.gitBranch}]` : ''
-          const tool = status.currentTool ? ` running ${status.currentTool}` : ''
-          const modelShort = status.model ? ` (${status.model.replace('claude-', '')})` : ''
-          const ctx =
-            status.contextTokens !== null
-              ? ` ctx:${Math.round((status.contextTokens ?? 0) / 1000)}k`
-              : ''
-          const msgs = status.messageCount ? ` msgs:${status.messageCount}` : ''
-          const lastText = status.lastText ? `\n    "${status.lastText.slice(0, 80)}"` : ''
-          return `- ${stateIcon} ${s.name}${isSelf}${modelShort}${branch}${tool}${ctx}${msgs}${lastText}`
+      if (!token) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Error: PARTY_LINE_TOKEN not set. Use ccpl to launch this session.',
+            },
+          ],
         }
-        const desc = s.metadata?.description ? ` — ${s.metadata.description}` : ''
-        return `- ${s.name}${isSelf}${desc} (last seen: ${new Date(s.lastSeen).toISOString()})`
+      }
+      const rows = await fetchSessions()
+      if (rows.length === 0) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'No session info available. The plugin can only introspect its own session via the switchboard right now — full discovery requires the dashboard.',
+            },
+          ],
+        }
+      }
+      const lines = rows.map((s) => {
+        const isSelf = s.name === sessionName ? ' (this session)' : ''
+        const state = s.online ? 'online' : 'offline'
+        const uuid = s.cc_session_uuid ? ` uuid=${s.cc_session_uuid.slice(0, 8)}…` : ''
+        return `- ${s.name}${isSelf} [${state}] cwd=${s.cwd}${uuid}`
       })
+      lines.push(
+        '',
+        'Note: full session discovery requires the dashboard. The plugin sees only its own switchboard row.',
+      )
       return { content: [{ type: 'text', text: lines.join('\n') }] }
     }
 
@@ -427,33 +632,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'party_line_set_name': {
-      const newName = String(args?.name ?? '')
-        .trim()
-        .toLowerCase()
-      if (!newName || newName.length > 30) {
-        return { content: [{ type: 'text', text: 'Error: name must be 1-30 characters.' }] }
-      }
-      if (!/^[a-z0-9][a-z0-9-]*$/.test(newName)) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: 'Error: name must be lowercase alphanumeric with hyphens (e.g. "discord", "project-foo").',
-            },
-          ],
-        }
-      }
-
-      const oldName = sessionName
-      sessionName = newName
-      transport.rename(newName)
-      await presence.rename(newName)
-      debug(`renamed: ${oldName} → ${newName}`)
       return {
         content: [
           {
             type: 'text',
-            text: `Session renamed from "${oldName}" to "${newName}". Other sessions will see the new name.`,
+            text: 'Error: session names are pinned at ccpl registration. Use `ccpl new <name>` to create a new session or `ccpl forget <old>` then register a new one.',
           },
         ],
       }
@@ -464,12 +647,36 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 })
 
+// --- UUID rotation watcher ---
+// Detects `/clear` and other resets by comparing the cached CC session UUID
+// every ~30s. Sends `uuid-rotate` to the switchboard when it changes so the
+// backend can archive the prior session.
+
+let lastKnownCcUuid: string | null = currentCcUuid()
+
+function startUuidWatcher(): void {
+  setInterval(() => {
+    const current = currentCcUuid()
+    if (current !== lastKnownCcUuid) {
+      const prior = lastKnownCcUuid
+      lastKnownCcUuid = current
+      if (ws && ws.isConnected()) {
+        try {
+          ws.send({ type: 'uuid-rotate', old_uuid: prior, new_uuid: current })
+          debug(`uuid-rotate: ${prior ?? 'null'} → ${current ?? 'null'}`)
+        } catch {
+          /* ignore — socket raced a close */
+        }
+      }
+    }
+  }, 30_000)
+}
+
 // --- Shutdown ---
 
 function shutdown(): void {
   debug('Shutting down')
-  presence.stop()
-  transport.stop()
+  ws?.stop()
   process.exit(0)
 }
 
@@ -478,44 +685,22 @@ process.on('SIGINT', shutdown)
 process.stdin.on('end', shutdown)
 process.stdin.on('close', shutdown)
 
-// --- Periodic name re-check ---
-// The parent Claude Code process might get --name set after we start
-// (e.g. session resumed with a name). Re-check on each heartbeat cycle.
-
-function startNameRecheck(): void {
-  setInterval(() => {
-    // Only re-check if we're still on the fallback name
-    const envName = process.env.PARTY_LINE_NAME ?? process.env.CLAUDE_SESSION_NAME
-    if (envName) return // explicit env var — don't override
-
-    const treeName = resolveNameFromProcessTree()
-    if (treeName && treeName !== sessionName) {
-      const oldName = sessionName
-      sessionName = treeName
-      transport.rename(treeName)
-      void presence.rename(treeName)
-      debug(`auto-renamed: ${oldName} → ${treeName} (detected from process tree)`)
-    }
-  }, 30_000) // same interval as heartbeats
-}
-
 // --- Start ---
 
 async function main(): Promise<void> {
   debug('Starting party line...')
 
-  // Start UDP transport
-  await transport.start(handleInbound)
-  debug('UDP multicast transport started')
+  // Kick off the switchboard WS connection (async, non-blocking).
+  if (ws) {
+    ws.start()
+    debug(`WS client dialing ${SWITCHBOARD_URL}`)
+  } else {
+    debug('No PARTY_LINE_TOKEN — skipping WS connection (tools will error)')
+  }
 
-  // Start presence (announce + heartbeat)
-  await presence.start()
-  debug('Presence tracker started')
+  startUuidWatcher()
 
-  // Periodically re-check parent process for name changes
-  startNameRecheck()
-
-  // Connect MCP server
+  // Connect MCP server — this is the main event-loop anchor.
   const stdio = new StdioServerTransport()
   await mcp.connect(stdio)
   debug('MCP server connected via stdio')
