@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   git_branch TEXT,
   context_tokens INTEGER,
   message_count INTEGER,
-  last_text TEXT
+  last_text TEXT,
+  source TEXT DEFAULT 'claude-code'
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_machine ON sessions(machine_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_lastseen ON sessions(last_seen);
@@ -39,7 +40,8 @@ CREATE TABLE IF NOT EXISTS events (
   ts TEXT NOT NULL,
   agent_id TEXT,
   agent_type TEXT,
-  payload_json TEXT NOT NULL
+  payload_json TEXT NOT NULL,
+  source TEXT DEFAULT 'claude-code'
 );
 CREATE INDEX IF NOT EXISTS idx_events_session_ts ON events(session_id, ts);
 CREATE INDEX IF NOT EXISTS idx_events_hook_ts ON events(hook_event, ts);

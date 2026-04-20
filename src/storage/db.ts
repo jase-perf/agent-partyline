@@ -24,10 +24,17 @@ const MIGRATIONS: Record<number, Migration> = {
     `)
   },
   3: (db) => {
-    db.exec(`
-      ALTER TABLE events ADD COLUMN source TEXT DEFAULT 'claude-code';
-      ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT 'claude-code';
-    `)
+    // Idempotent: schema.sql now includes source columns, but this runs for
+    // existing v2 databases that need them added. SQLite doesn't support
+    // "ALTER TABLE ADD COLUMN IF NOT EXISTS", so we check first.
+    const eventsCols = db.query('PRAGMA table_info(events)').all() as Array<{ name: string }>
+    if (!eventsCols.find((c) => c.name === 'source')) {
+      db.exec("ALTER TABLE events ADD COLUMN source TEXT DEFAULT 'claude-code'")
+    }
+    const sessionsCols = db.query('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
+    if (!sessionsCols.find((c) => c.name === 'source')) {
+      db.exec("ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT 'claude-code'")
+    }
   },
 }
 
