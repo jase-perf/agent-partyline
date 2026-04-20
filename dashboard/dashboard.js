@@ -2034,39 +2034,47 @@ if (window.visualViewport) {
 
 function updateBanner() {
   const banner = document.getElementById('notif-banner')
-  const text = document.getElementById('notif-banner-text')
+  if (!banner) return
+  const text = banner.querySelector('.notif-banner-text')
   const btn = document.getElementById('notif-banner-btn')
-  if (!banner || !text || !btn) return
-  const state = notif.getPermissionState()
-  if (state === 'granted' || state === 'unsupported') {
-    banner.hidden = true
-    return
-  }
-  if (localStorage.getItem('partyLineNotifBannerDismissed') === '1') {
-    banner.hidden = true
-    return
-  }
-  banner.hidden = false
+  if (!text || !btn) return
+
+  const dismissed = localStorage.getItem('partyLineNotifBannerDismissed') === '1'
   const insecure = !window.isSecureContext
+  const state = notif.getPermissionState()
+
+  // Hide banner entirely when permission is granted OR user dismissed it (for
+  // default state only).
+  if (state === 'granted') {
+    banner.hidden = true
+    return
+  }
+  if (state === 'default' && dismissed) {
+    banner.hidden = true
+    return
+  }
+  if (state === 'default') {
+    // Quiet hint only, no button. User enables via clicking a bell.
+    banner.hidden = false
+    text.textContent = '🔔 Click a session bell to enable notifications for that session.'
+    btn.hidden = true
+    return
+  }
+
+  // state === 'denied' OR insecure context
+  banner.hidden = false
   if (insecure) {
     text.textContent =
-      '🔔 Notifications require HTTPS or localhost. Reach the dashboard at https:// (or via a tunnel) to enable.'
-    btn.hidden = true
-  } else if (state === 'denied') {
-    text.textContent = '🔔 Notifications blocked. Re-enable in browser settings.'
+      '🔔 Notifications require HTTPS. Reach the dashboard at https:// (or via a tunnel) to enable.'
     btn.hidden = true
   } else {
-    text.textContent = '🔔 Enable browser notifications for Party Line'
-    btn.hidden = false
+    // denied
+    text.textContent =
+      "🔔 Notifications blocked. Re-enable in your browser's site settings for this page."
+    btn.hidden = true
   }
 }
 
-document.getElementById('notif-banner-btn')?.addEventListener('click', async () => {
-  await notif.requestPermission()
-  updateBanner()
-  // Re-render cards so bells pick up the new permission state.
-  updateSessions(lastSessions)
-})
 document.getElementById('notif-banner-dismiss')?.addEventListener('click', () => {
   localStorage.setItem('partyLineNotifBannerDismissed', '1')
   updateBanner()
