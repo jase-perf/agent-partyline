@@ -35,16 +35,17 @@ function formatMessage(envelope: Envelope): string {
   const time = new Date(envelope.ts).toLocaleTimeString()
   const tag = envelope.callback_id ? ` [cb:${envelope.callback_id}]` : ''
   const resp = envelope.response_to ? ` [↩${envelope.response_to}]` : ''
-  const typeColor = {
-    message: '\x1b[37m',
-    request: '\x1b[33m',
-    response: '\x1b[32m',
-    status: '\x1b[36m',
-    heartbeat: '\x1b[90m',
-    announce: '\x1b[35m',
-    'permission-request': '\x1b[33m',
-    'permission-response': '\x1b[32m',
-  }[envelope.type] ?? '\x1b[37m'
+  const typeColor =
+    {
+      message: '\x1b[37m',
+      request: '\x1b[33m',
+      response: '\x1b[32m',
+      status: '\x1b[36m',
+      heartbeat: '\x1b[90m',
+      announce: '\x1b[35m',
+      'permission-request': '\x1b[33m',
+      'permission-response': '\x1b[32m',
+    }[envelope.type] ?? '\x1b[37m'
   const reset = '\x1b[0m'
 
   return `${reset}${time} ${typeColor}${envelope.type.padEnd(9)}${reset} ${envelope.from} → ${envelope.to}${tag}${resp}: ${envelope.body}`
@@ -92,9 +93,10 @@ async function main(): Promise<void> {
               const stateIcon = st.state === 'working' ? '🔄' : st.state === 'idle' ? '💤' : '❓'
               const branch = st.gitBranch ? `[${st.gitBranch}]` : ''
               const tool = st.currentTool ? `running ${st.currentTool}` : st.state
-              const ctx = st.contextPercent !== null
-                ? `ctx: ${st.contextPercent}% (${Math.round((st.contextTokens ?? 0) / 1000)}k/${Math.round((st.contextLimit ?? 0) / 1000)}k)`
-                : ''
+              const ctx =
+                st.contextPercent !== null
+                  ? `ctx: ${st.contextPercent}% (${Math.round((st.contextTokens ?? 0) / 1000)}k/${Math.round((st.contextLimit ?? 0) / 1000)}k)`
+                  : ''
               const msgs = st.messageCount ? `${st.messageCount} msgs` : ''
               console.log(`  ${stateIcon} ${s.name}${self} ${branch}`)
               console.log(`     ${tool} · ${ctx} · ${msgs}`)
@@ -114,7 +116,10 @@ async function main(): Promise<void> {
 
     case 'send': {
       const to = args[1]
-      const message = args.slice(2).filter((a) => !a.startsWith('--')).join(' ')
+      const message = args
+        .slice(2)
+        .filter((a) => !a.startsWith('--'))
+        .join(' ')
       if (!to || !message) {
         console.error('Usage: cli.ts send <to> <message>')
         process.exit(1)
@@ -135,7 +140,10 @@ async function main(): Promise<void> {
 
     case 'request': {
       const to = args[1]
-      const message = args.slice(2).filter((a) => !a.startsWith('--')).join(' ')
+      const message = args
+        .slice(2)
+        .filter((a) => !a.startsWith('--'))
+        .join(' ')
       if (!to || !message) {
         console.error('Usage: cli.ts request <to> <message>')
         process.exit(1)

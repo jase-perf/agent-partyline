@@ -10,10 +10,7 @@ import { basename } from 'node:path'
 import { readFileSync } from 'fs'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import {
-  ListToolsRequestSchema,
-  CallToolRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js'
+import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { UdpMulticastTransport } from './transport/udp-multicast.js'
 import { PresenceTracker } from './presence.js'
@@ -34,7 +31,7 @@ function resolveNameFromProcessTree(): string | null {
       const args = cmdlineRaw.split('\0').filter(Boolean)
 
       // Check if this is a claude process
-      const isClaude = args.some(arg => arg.endsWith('/claude') || arg === 'claude')
+      const isClaude = args.some((arg) => arg.endsWith('/claude') || arg === 'claude')
       if (isClaude) {
         // Look for --name or -n flag
         for (let j = 0; j < args.length - 1; j++) {
@@ -198,7 +195,10 @@ function handleInbound(envelope: Envelope): void {
   const isForUs =
     envelope.to === sessionName ||
     envelope.to === 'all' ||
-    envelope.to.split(',').map((s) => s.trim()).includes(sessionName)
+    envelope.to
+      .split(',')
+      .map((s) => s.trim())
+      .includes(sessionName)
 
   if (!isForUs) return
 
@@ -243,8 +243,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'party_line_send',
-      description:
-        'Send a message to another Claude Code session by name. Use "all" to broadcast.',
+      description: 'Send a message to another Claude Code session by name. Use "all" to broadcast.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -393,13 +392,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
         const isSelf = s.name === sessionName ? ' (this session)' : ''
         const status = s.metadata?.status
         if (status) {
-          const stateIcon = status.state === 'working' ? '🔄' : status.state === 'idle' ? '💤' : '❓'
+          const stateIcon =
+            status.state === 'working' ? '🔄' : status.state === 'idle' ? '💤' : '❓'
           const branch = status.gitBranch ? ` [${status.gitBranch}]` : ''
           const tool = status.currentTool ? ` running ${status.currentTool}` : ''
           const modelShort = status.model ? ` (${status.model.replace('claude-', '')})` : ''
-          const ctx = status.contextTokens !== null
-            ? ` ctx:${Math.round((status.contextTokens ?? 0) / 1000)}k`
-            : ''
+          const ctx =
+            status.contextTokens !== null
+              ? ` ctx:${Math.round((status.contextTokens ?? 0) / 1000)}k`
+              : ''
           const msgs = status.messageCount ? ` msgs:${status.messageCount}` : ''
           const lastText = status.lastText ? `\n    "${status.lastText.slice(0, 80)}"` : ''
           return `- ${stateIcon} ${s.name}${isSelf}${modelShort}${branch}${tool}${ctx}${msgs}${lastText}`
@@ -426,7 +427,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'party_line_set_name': {
-      const newName = String(args?.name ?? '').trim().toLowerCase()
+      const newName = String(args?.name ?? '')
+        .trim()
+        .toLowerCase()
       if (!newName || newName.length > 30) {
         return { content: [{ type: 'text', text: 'Error: name must be 1-30 characters.' }] }
       }
