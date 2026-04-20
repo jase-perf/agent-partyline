@@ -50,6 +50,33 @@ export function createNotifications(deps) {
   const lastKnownState = new Map()
   const resolvedPermissions = new Set()
 
+  function shouldFire(sessionName) {
+    if (!settings.get(sessionName)) return false
+    if (!deps.NotificationCtor) return false
+    if (deps.NotificationCtor.permission !== 'granted') return false
+    if (deps.doc.hidden) return true
+    const route = deps.getCurrentRoute()
+    return route !== '/session/' + sessionName
+  }
+
+  function fire(sessionName, title, body) {
+    const NC = deps.NotificationCtor
+    if (!NC) return
+    const n = new NC(title, {
+      body,
+      tag: sessionName,
+      data: { sessionName },
+    })
+    activeNotifications.set(sessionName, n)
+    n.onclick = () => {
+      try {
+        deps.win.focus()
+      } catch {}
+      deps.navigate('/#/session/' + sessionName)
+      n.close()
+    }
+  }
+
   return {
     isEnabled(sessionName) {
       return settings.get(sessionName) === true
@@ -66,6 +93,15 @@ export function createNotifications(deps) {
     async requestPermission() {
       if (!deps.NotificationCtor) return 'unsupported'
       return await deps.NotificationCtor.requestPermission()
+    },
+    onSessionUpdate(update) {
+      if (!update || !update.name) return
+      const prev = lastKnownState.get(update.name)
+      lastKnownState.set(update.name, update.state)
+      if (prev === 'working' && update.state === 'idle' && shouldFire(update.name)) {
+        const body = lastAssistantText.get(update.name) || 'Claude is waiting'
+        fire(update.name, update.name, body)
+      }
     },
   }
 }

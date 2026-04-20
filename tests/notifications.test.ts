@@ -42,3 +42,58 @@ describe('createNotifications — settings', async () => {
     expect(notif.getPermissionState()).toBe('unsupported')
   })
 })
+
+describe('createNotifications — trigger A (working→idle)', async () => {
+  test('fires when state transitions working→idle and toggle is on', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+
+    await notif.onSessionUpdate({ session_id: 'research', name: 'research', state: 'working' })
+    await notif.onSessionUpdate({ session_id: 'research', name: 'research', state: 'idle' })
+
+    expect(fired).toHaveLength(1)
+    expect(fired[0].title).toContain('research')
+    expect(fired[0].options.tag).toBe('research')
+  })
+
+  test('does not fire on idle→idle', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    await notif.onSessionUpdate({ session_id: 'research', name: 'research', state: 'idle' })
+    await notif.onSessionUpdate({ session_id: 'research', name: 'research', state: 'idle' })
+    expect(fired).toHaveLength(0)
+  })
+
+  test('does not fire on working→working', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    await notif.onSessionUpdate({ session_id: 'research', name: 'research', state: 'working' })
+    await notif.onSessionUpdate({ session_id: 'research', name: 'research', state: 'working' })
+    expect(fired).toHaveLength(0)
+  })
+
+  test('does not fire on working→ended (SessionEnd is not a turn)', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    await notif.onSessionUpdate({ session_id: 'research', name: 'research', state: 'working' })
+    await notif.onSessionUpdate({ session_id: 'research', name: 'research', state: 'ended' })
+    expect(fired).toHaveLength(0)
+  })
+
+  test('first-ever update records state but does not fire', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    await notif.onSessionUpdate({ session_id: 'research', name: 'research', state: 'idle' })
+    expect(fired).toHaveLength(0)
+  })
+})
