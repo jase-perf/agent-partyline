@@ -2074,34 +2074,63 @@ document.getElementById('notif-banner-dismiss')?.addEventListener('click', () =>
 
 updateBanner()
 
+// Shared helpers for bell interaction — must be called synchronously from a click handler
+// so that requestPermission() fires inside the user gesture (Safari + Chromium requirement).
+
+function handleBellClick(bellEl, session) {
+  const state = notif.getPermissionState()
+
+  if (state === 'default') {
+    // SYNCHRONOUS requestPermission — no await before this call.
+    // Don't flip the bell until permission resolves.
+    const p = notif.requestPermission()
+    p.then((result) => {
+      if (result === 'granted') {
+        notif.setEnabled(session, true)
+      }
+      updateBellUIEverywhere(session)
+      updateBanner()
+    })
+    return
+  }
+
+  if (state === 'granted') {
+    const next = !notif.isEnabled(session)
+    notif.setEnabled(session, next)
+    updateBellUIEverywhere(session)
+    return
+  }
+
+  // state === 'denied' or 'unsupported': clicks do nothing beyond visual feedback.
+  updateBellUIEverywhere(session)
+}
+
+function updateBellUIEverywhere(session) {
+  const on = notif.isEnabled(session)
+  const state = notif.getPermissionState()
+  const disabled = state !== 'granted'
+  const sel = `.notif-bell[data-session="${CSS.escape(session)}"]`
+  document.querySelectorAll(sel).forEach((bell) => {
+    bell.classList.toggle('notif-bell-on', on)
+    bell.classList.toggle('notif-bell-off', !on)
+    bell.classList.toggle('notif-bell-disabled', disabled)
+    bell.textContent = on ? '🔔' : '🔕'
+    bell.setAttribute('aria-label', 'Notifications for ' + session + ': ' + (on ? 'on' : 'off'))
+  })
+}
+
 // Delegated bell-toggle handler on the Switchboard grid.
 document.getElementById('overview-grid')?.addEventListener('click', (ev) => {
   const target = ev.target
   if (!(target instanceof HTMLElement)) return
   const bell = target.closest('.notif-bell')
   if (!bell) return
-  // Prevent the card click from opening session detail.
   ev.stopPropagation()
-  if (bell.classList.contains('notif-bell-disabled')) return
+
   const session = bell.getAttribute('data-session')
   if (!session) return
-  const next = !notif.isEnabled(session)
-  notif.setEnabled(session, next)
-  bell.classList.toggle('notif-bell-on', next)
-  bell.classList.toggle('notif-bell-off', !next)
-  bell.textContent = next ? '🔔' : '🔕'
-  bell.setAttribute('aria-label', `Notifications for ${session}: ${next ? 'on' : 'off'}`)
-  // Sync the Session Detail header bell if it's for the same session.
-  const detailBell = document.getElementById('detail-bell')
-  if (detailBell && detailBell.getAttribute('data-session') === session) {
-    detailBell.classList.toggle('notif-bell-on', next)
-    detailBell.classList.toggle('notif-bell-off', !next)
-    detailBell.textContent = next ? '🔔' : '🔕'
-    detailBell.setAttribute(
-      'aria-label',
-      'Notifications for ' + session + ': ' + (next ? 'on' : 'off'),
-    )
-  }
+
+  handleBellClick(bell, session)
 })
 
 // Session Detail header bell toggle.
@@ -2109,20 +2138,8 @@ document.getElementById('detail-bell')?.addEventListener('click', (ev) => {
   const bell = ev.currentTarget
   if (!(bell instanceof HTMLElement)) return
   const session = bell.getAttribute('data-session')
-  if (!session || bell.classList.contains('notif-bell-disabled')) return
-  const next = !notif.isEnabled(session)
-  notif.setEnabled(session, next)
-  bell.classList.toggle('notif-bell-on', next)
-  bell.classList.toggle('notif-bell-off', !next)
-  bell.textContent = next ? '🔔' : '🔕'
-  bell.setAttribute('aria-label', 'Notifications for ' + session + ': ' + (next ? 'on' : 'off'))
-  // Also update the Switchboard card bell for this session if it is in the DOM.
-  const cardBell = document.querySelector(`.notif-bell[data-session="${CSS.escape(session)}"]`)
-  if (cardBell) {
-    cardBell.classList.toggle('notif-bell-on', next)
-    cardBell.classList.toggle('notif-bell-off', !next)
-    cardBell.textContent = next ? '🔔' : '🔕'
-  }
+  if (!session) return
+  handleBellClick(bell, session)
 })
 
 // --- Permission request cards ---
