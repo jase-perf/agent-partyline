@@ -1,5 +1,8 @@
 import { describe, expect, test, beforeEach } from 'bun:test'
-import { rmSync } from 'fs'
+import { rmSync, mkdtempSync } from 'fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { Database } from 'bun:sqlite'
 import { openDb, SCHEMA_VERSION } from '../src/storage/db.js'
 import { insertEvent, upsertSession, recentEvents, sessionState } from '../src/storage/queries.js'
 import { pruneOldEvents } from '../src/storage/retention.js'
@@ -8,7 +11,11 @@ const TEST_PATH = '/tmp/party-line-test.db'
 
 describe('storage', () => {
   beforeEach(() => {
-    try { rmSync(TEST_PATH) } catch { /* no-op */ }
+    try {
+      rmSync(TEST_PATH)
+    } catch {
+      /* no-op */
+    }
   })
 
   test('openDb creates schema', () => {
@@ -78,11 +85,18 @@ describe('storage', () => {
   test('upsertSession preserves existing fields when inbound is null', () => {
     const db = openDb(TEST_PATH)
     upsertSession(db, {
-      session_id: 's1', machine_id: 'm1', name: 'w', last_seen: 't1',
-      cwd: '/home/x', model: 'sonnet',
+      session_id: 's1',
+      machine_id: 'm1',
+      name: 'w',
+      last_seen: 't1',
+      cwd: '/home/x',
+      model: 'sonnet',
     })
     upsertSession(db, {
-      session_id: 's1', machine_id: 'm1', name: 'w', last_seen: 't2',
+      session_id: 's1',
+      machine_id: 'm1',
+      name: 'w',
+      last_seen: 't2',
     }) // cwd/model omitted — should be preserved
     const row = sessionState(db, 's1')
     expect(row?.cwd).toBe('/home/x')
@@ -95,8 +109,22 @@ describe('storage', () => {
     const db = openDb(TEST_PATH)
     const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString()
     const recent = new Date().toISOString()
-    insertEvent(db, { machine_id: 'm', session_name: 'x', session_id: 's1', hook_event: 'Stop', ts: old, payload: {} })
-    insertEvent(db, { machine_id: 'm', session_name: 'x', session_id: 's1', hook_event: 'Stop', ts: recent, payload: {} })
+    insertEvent(db, {
+      machine_id: 'm',
+      session_name: 'x',
+      session_id: 's1',
+      hook_event: 'Stop',
+      ts: old,
+      payload: {},
+    })
+    insertEvent(db, {
+      machine_id: 'm',
+      session_name: 'x',
+      session_id: 's1',
+      hook_event: 'Stop',
+      ts: recent,
+      payload: {},
+    })
     const deleted = pruneOldEvents(db, 30)
     expect(deleted).toBe(1)
     const remaining = recentEvents(db, { limit: 10 })
@@ -170,7 +198,13 @@ describe('storage', () => {
 
   test('upsertSession preserves source when specified', () => {
     const db = openDb(TEST_PATH)
-    upsertSession(db, { session_id: 's3', machine_id: 'm1', name: 'gem2', last_seen: 't1', source: 'gemini-cli' })
+    upsertSession(db, {
+      session_id: 's3',
+      machine_id: 'm1',
+      name: 'gem2',
+      last_seen: 't1',
+      source: 'gemini-cli',
+    })
     const row = sessionState(db, 's3')
     expect(row?.source).toBe('gemini-cli')
     db.close()
@@ -178,11 +212,70 @@ describe('storage', () => {
 
   test('upsertSession source is immutable after first write (conflict does not update source)', () => {
     const db = openDb(TEST_PATH)
-    upsertSession(db, { session_id: 's4', machine_id: 'm1', name: 'x', last_seen: 't1', source: 'gemini-cli' })
+    upsertSession(db, {
+      session_id: 's4',
+      machine_id: 'm1',
+      name: 'x',
+      last_seen: 't1',
+      source: 'gemini-cli',
+    })
     // Second upsert with different source — should not overwrite
-    upsertSession(db, { session_id: 's4', machine_id: 'm1', name: 'x', last_seen: 't2', source: 'claude-code' })
+    upsertSession(db, {
+      session_id: 's4',
+      machine_id: 'm1',
+      name: 'x',
+      last_seen: 't2',
+      source: 'claude-code',
+    })
     const row = sessionState(db, 's4')
     expect(row?.source).toBe('gemini-cli')
     db.close()
+  })
+})
+
+describe('openDb migration', () => {
+  test('upgrades a pre-existing v1 DB to SCHEMA_VERSION without skipping migrations', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'partylinedb-'))
+    const dbPath = join(tmp, 'test.db')
+    try {
+      // Simulate a v1 DB by creating the minimal schema the v1 code would have produced.
+      const pre = new Database(dbPath)
+      pre.exec('CREATE TABLE events (id INTEGER PRIMARY KEY, hook_event TEXT, ts INTEGER)')
+      pre.exec('PRAGMA user_version = 1')
+      pre.close()
+
+      // Open via the real migration runner.
+      const db = openDb(dbPath)
+      const row = db.query('PRAGMA user_version').get() as { user_version: number }
+      expect(row.user_version).toBe(SCHEMA_VERSION)
+
+      // All expected tables from the current SCHEMA_VERSION should exist.
+      const tables = db
+        .query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .all() as { name: string }[]
+      const names = tables.map((t) => t.name)
+      expect(names).toContain('events')
+      expect(names).toContain('sessions')
+      expect(names).toContain('tool_calls')
+      expect(names).toContain('subagents')
+      expect(names).toContain('metrics_daily')
+      db.close()
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
+  test('is idempotent: opening an already-current DB is a no-op', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'partylinedb-'))
+    const dbPath = join(tmp, 'test.db')
+    try {
+      openDb(dbPath).close()
+      const db = openDb(dbPath) // second open should not throw
+      const row = db.query('PRAGMA user_version').get() as { user_version: number }
+      expect(row.user_version).toBe(SCHEMA_VERSION)
+      db.close()
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
   })
 })
