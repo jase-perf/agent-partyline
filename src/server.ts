@@ -115,6 +115,7 @@ const mcp = new Server(
     capabilities: {
       experimental: {
         'claude/channel': {},
+        'claude/channel/permission': {},
       },
       tools: {},
     },
