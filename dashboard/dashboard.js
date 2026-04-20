@@ -763,7 +763,24 @@ function buildCardContents(s) {
   sparklineSlot.className = 'card-sparkline'
   body.appendChild(sparklineSlot)
 
-  return { header: header, body: body, sparklineSlot: sparklineSlot }
+  // Notification bell — absolute-positioned in the top-right of the card
+  var bell = buildBellButton(s.name)
+
+  return { header: header, body: body, sparklineSlot: sparklineSlot, bell: bell }
+}
+
+function buildBellButton(sessionName) {
+  var on = notif ? notif.isEnabled(sessionName) : false
+  var permDenied = !notif || notif.getPermissionState() !== 'granted'
+  var bell = document.createElement('button')
+  bell.type = 'button'
+  bell.className = 'notif-bell notif-bell-' + (on ? 'on' : 'off')
+  if (permDenied) bell.classList.add('notif-bell-disabled')
+  bell.dataset.session = sessionName
+  bell.title = permDenied ? 'Enable notifications first' : 'Toggle notifications for ' + sessionName
+  bell.setAttribute('aria-label', 'Notifications for ' + sessionName + ': ' + (on ? 'on' : 'off'))
+  bell.textContent = on ? '🔔' : '🔕'
+  return bell
 }
 
 function buildSessionCard(s) {
@@ -775,6 +792,7 @@ function buildSessionCard(s) {
   var parts = buildCardContents(s)
   card.appendChild(parts.header)
   card.appendChild(parts.body)
+  if (parts.bell) card.appendChild(parts.bell)
 
   // Fetch sparkline async — uses session name as session_id proxy for party-line sessions
   // For DB sessions (with status), use session_id if available
@@ -802,6 +820,7 @@ function updateOverviewGrid(sessions) {
       var parts = buildCardContents(s)
       existing.appendChild(parts.header)
       existing.appendChild(parts.body)
+      if (parts.bell) existing.appendChild(parts.bell)
       // Re-attach sparkline (uses cache — won't re-fetch if within 60s)
       var sparkId =
         s.metadata && s.metadata.status && s.metadata.status.sessionId
@@ -1967,6 +1986,8 @@ function updateBanner() {
 document.getElementById('notif-banner-btn')?.addEventListener('click', async () => {
   await notif.requestPermission()
   updateBanner()
+  // Re-render cards so bells pick up the new permission state.
+  updateSessions(lastSessions)
 })
 document.getElementById('notif-banner-dismiss')?.addEventListener('click', () => {
   localStorage.setItem('partyLineNotifBannerDismissed', '1')
@@ -1974,5 +1995,24 @@ document.getElementById('notif-banner-dismiss')?.addEventListener('click', () =>
 })
 
 updateBanner()
+
+// Delegated bell-toggle handler on the Switchboard grid.
+document.getElementById('overview-grid')?.addEventListener('click', (ev) => {
+  const target = ev.target
+  if (!(target instanceof HTMLElement)) return
+  const bell = target.closest('.notif-bell')
+  if (!bell) return
+  // Prevent the card click from opening session detail.
+  ev.stopPropagation()
+  if (bell.classList.contains('notif-bell-disabled')) return
+  const session = bell.getAttribute('data-session')
+  if (!session) return
+  const next = !notif.isEnabled(session)
+  notif.setEnabled(session, next)
+  bell.classList.toggle('notif-bell-on', next)
+  bell.classList.toggle('notif-bell-off', !next)
+  bell.textContent = next ? '🔔' : '🔕'
+  bell.setAttribute('aria-label', `Notifications for ${session}: ${next ? 'on' : 'off'}`)
+})
 
 connect()
