@@ -181,8 +181,13 @@ export function createSwitchboard(db: Database): Switchboard {
           if (!row) return
           const oldUuid = frame['old_uuid']
           const newUuid = frame['new_uuid']
-          if (row.cc_session_uuid && oldUuid && row.cc_session_uuid === oldUuid) {
-            archiveSession(db, name, String(oldUuid), 'clear')
+          // If the row has any current uuid, archive it before we overwrite.
+          // Use the client-provided reason when oldUuid matches; otherwise
+          // flag the drift in the reason string.
+          if (row.cc_session_uuid) {
+            const reason =
+              oldUuid && row.cc_session_uuid === oldUuid ? 'clear' : 'rotate_uuid_drift'
+            archiveSession(db, name, row.cc_session_uuid, reason)
           }
           updateSessionOnConnect(
             db,

@@ -108,6 +108,11 @@ const MACHINE_ID_PATH = join(CONFIG_DIR, 'machine-id')
 
 mkdirSync(CONFIG_DIR, { recursive: true })
 const db = openDb(DB_PATH)
+if (!isAuthDisabled() && !process.env.PARTY_LINE_DASHBOARD_SECRET) {
+  console.warn(
+    '[auth] PARTY_LINE_DASHBOARD_SECRET not set; cookies will be invalidated on restart.',
+  )
+}
 const token = loadOrCreateToken(TOKEN_PATH)
 const machineId = getMachineId(MACHINE_ID_PATH)
 const aggregator = new Aggregator(db)
@@ -218,6 +223,7 @@ function loadTls(): { cert: string; key: string } | undefined {
   }
 }
 const tls = loadTls()
+const tlsActive = tls !== undefined
 
 // --- Auth helpers ---
 
@@ -284,7 +290,7 @@ const server = Bun.serve({
           status: 200,
           headers: {
             'Content-Type': 'application/json',
-            'Set-Cookie': cookieHeaderForSet(cookie),
+            'Set-Cookie': cookieHeaderForSet(cookie, tlsActive),
           },
         })
       })()
@@ -307,7 +313,7 @@ const server = Bun.serve({
       if (c) revokeCookie(db, c)
       return new Response(null, {
         status: 204,
-        headers: { 'Set-Cookie': cookieHeaderForClear() },
+        headers: { 'Set-Cookie': cookieHeaderForClear(tlsActive) },
       })
     }
 
@@ -597,12 +603,29 @@ const server = Bun.serve({
   websocket: {
     // Type hint so ws.data carries our per-connection kind tag.
     // See WebSocketHandler.data in bun-types for why this pattern exists.
-    data: {} as { kind?: 'session' | 'observer' | 'legacy' } | undefined,
+    data: {} as
+      | {
+          kind?: 'session' | 'observer' | 'legacy'
+          helloTimer?: ReturnType<typeof setTimeout>
+          name?: string
+          token?: string
+        }
+      | undefined,
     idleTimeout: 30, // seconds; Bun kicks silent connections after this
     open(ws) {
       const kind = ws.data?.kind
       if (kind === 'session') {
-        // Wait for hello frame — don't do anything yet.
+        // Authenticate within 10s or we close.
+        const deadline = setTimeout(() => {
+          try {
+            ws.send(JSON.stringify({ type: 'error', code: 'hello_deadline' }))
+          } catch {
+            /* ignore */
+          }
+          ws.close(4401, 'hello_deadline')
+        }, 10_000)
+        // Stash the timer on ws.data so message() can clear it after hello accept.
+        ;(ws.data as { helloTimer?: ReturnType<typeof setTimeout> }).helloTimer = deadline
         return
       }
       if (kind === 'observer') {
@@ -629,7 +652,13 @@ const server = Bun.serve({
         return
       }
       if (kind === 'session') {
+        const wsData = ws.data as {
+          helloTimer?: ReturnType<typeof setTimeout>
+          name?: string
+        }
         if (frame.type === 'hello') {
+          if (wsData.helloTimer) clearTimeout(wsData.helloTimer)
+          wsData.helloTimer = undefined
           const res = switchboard.handleSessionHello(ws as never, frame as never)
           if (!res.ok) {
             try {
@@ -645,6 +674,16 @@ const server = Bun.serve({
           } catch {
             /* ignore */
           }
+          return
+        }
+        // Pre-hello: any non-hello frame before auth is rejected.
+        if (!wsData.name) {
+          try {
+            ws.send(JSON.stringify({ type: 'error', code: 'hello_required' }))
+          } catch {
+            /* ignore */
+          }
+          ws.close(4401, 'hello_required')
           return
         }
         switchboard.handleSessionFrame(ws as never, frame)
@@ -686,6 +725,11 @@ const server = Bun.serve({
     close(ws) {
       const kind = ws.data?.kind
       if (kind === 'session') {
+        const wsData = ws.data as { helloTimer?: ReturnType<typeof setTimeout> }
+        if (wsData.helloTimer) {
+          clearTimeout(wsData.helloTimer)
+          wsData.helloTimer = undefined
+        }
         switchboard.handleSessionClose(ws as never)
         return
       }

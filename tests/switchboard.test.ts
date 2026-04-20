@@ -209,4 +209,31 @@ describe('switchboard', () => {
     expect(archives[0]!.reason).toBe('clear')
     cleanup()
   })
+
+  test('uuid-rotate with mismatched old_uuid still archives current uuid', () => {
+    const row = registerSession(db, 'foo', '/tmp')
+    const sb = createSwitchboard(db)
+    const ws = fakeWs('session')
+    sb.handleSessionHello(ws, {
+      token: row.token,
+      name: 'foo',
+      cc_session_uuid: 'server-uuid',
+      pid: 1,
+      machine_id: null,
+    })
+    // Client claims old_uuid was something else.
+    sb.handleSessionFrame(ws, {
+      type: 'uuid-rotate',
+      old_uuid: 'not-the-server-uuid',
+      new_uuid: 'new-uuid',
+    })
+    const archives = db.query(`SELECT * FROM ccpl_archives WHERE name = ?`).all('foo') as Array<{
+      old_uuid: string
+      reason: string
+    }>
+    expect(archives.length).toBe(1)
+    expect(archives[0]!.old_uuid).toBe('server-uuid')
+    expect(archives[0]!.reason).toBe('rotate_uuid_drift')
+    cleanup()
+  })
 })

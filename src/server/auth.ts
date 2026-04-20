@@ -84,13 +84,15 @@ export function parseCookieHeader(header: string | null): string | null {
   return null
 }
 
-export function cookieHeaderForSet(cookie: string): string {
+export function cookieHeaderForSet(cookie: string, secure: boolean): string {
   const maxAge = Math.floor(COOKIE_TTL_MS / 1000)
-  return `${COOKIE_NAME}=${cookie}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${maxAge}`
+  const secureAttr = secure ? '; Secure' : ''
+  return `${COOKIE_NAME}=${cookie}; HttpOnly${secureAttr}; SameSite=Strict; Path=/; Max-Age=${maxAge}`
 }
 
-export function cookieHeaderForClear(): string {
-  return `${COOKIE_NAME}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0`
+export function cookieHeaderForClear(secure: boolean): string {
+  const secureAttr = secure ? '; Secure' : ''
+  return `${COOKIE_NAME}=; HttpOnly${secureAttr}; SameSite=Strict; Path=/; Max-Age=0`
 }
 
 export function pruneExpiredCookies(db: Database): void {
