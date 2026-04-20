@@ -132,6 +132,13 @@ function applyRoute(state, opts) {
       Array.isArray(lastSessions) && lastSessions.some((s) => s.name === state.sessionName)
     selectedSessionId = state.sessionName
     selectedAgentId = state.agentId || null
+    // `notif` is declared later in this module; during the initial applyRoute
+    // from parseUrl() it isn't defined yet (TDZ), so guard defensively.
+    try {
+      notif.dispatchSessionViewed(state.sessionName)
+    } catch {
+      /* notif not yet initialized */
+    }
     if (sessionDetailTab) {
       sessionDetailTab.disabled = false
     }
@@ -247,6 +254,7 @@ function connect() {
       addMessage(data.data)
       addMessageToBus(data.data)
       if (data.data.to && data.data.to !== 'all') bumpUnread(data.data.to)
+      notif.onPartyLineMessage(data.data)
       // Live-append to the session-detail stream without re-fetching the
       // full transcript (instant feedback for sent + received messages).
       if (
@@ -263,6 +271,7 @@ function connect() {
     } else if (data.type === 'session-update') {
       handleSessionUpdate(data.data)
       bumpUnread(data.data.name)
+      notif.onSessionUpdate(data.data)
     } else if (data.type === 'jsonl') {
       handleJsonlEvent(data.data)
       bumpUnread(resolveNameFromJsonlPath(data.data.file_path) || data.data.session_id)
@@ -273,6 +282,15 @@ function connect() {
       maybeHandleCompactForCurrentView(data.data)
     } else if (data.type === 'stream-reset') handleStreamReset(data.data)
     else if (data.type === 'cross-call') handleCrossCall(data.data)
+    else if (data.type === 'permission-request') {
+      notif.onPermissionRequest(data.data)
+      renderPermissionCard(data.data)
+    } else if (data.type === 'permission-resolved') {
+      notif.onPermissionResolved(data.data)
+      updatePermissionCardResolved(data.data)
+    } else if (data.type === 'notification-dismiss') {
+      notif.onNotificationDismiss(data.data)
+    }
   }
 }
 
@@ -2062,6 +2080,28 @@ document.getElementById('detail-bell')?.addEventListener('click', (ev) => {
     cardBell.classList.toggle('notif-bell-on', next)
     cardBell.classList.toggle('notif-bell-off', !next)
     cardBell.textContent = next ? '🔔' : '🔕'
+  }
+})
+
+// --- Permission request cards (populated in Task 20) ---
+
+function renderPermissionCard(_data) {
+  /* implemented in Task 20 */
+}
+
+function updatePermissionCardResolved(_data) {
+  /* implemented in Task 20 */
+}
+
+// When the tab becomes visible again, dispatch session-viewed for the current
+// session (if any) so any pending notifications for it get dismissed.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return
+  if (currentView !== 'session-detail' || !selectedSessionId) return
+  try {
+    notif.dispatchSessionViewed(selectedSessionId)
+  } catch {
+    /* notif not yet initialized */
   }
 })
 
