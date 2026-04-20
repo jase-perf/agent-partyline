@@ -164,6 +164,11 @@
         </div>
         <div class="subview" data-subview="bus" hidden>
           <div class="bus-feed-wrap">
+            <div class="bus-filters">
+              <label><input type="checkbox" id="showHeartbeats" checked /> heartbeats</label>
+              <label><input type="checkbox" id="showAnnounce" checked /> announces</label>
+              <label><input type="checkbox" id="autoscroll" checked /> autoscroll</label>
+            </div>
             <div class="feed-controls"><span id="busMsgCount">0 messages</span></div>
             <div class="feed" id="busFeed"></div>
             <form

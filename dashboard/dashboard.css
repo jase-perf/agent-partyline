@@ -1799,3 +1799,18 @@ section[data-view='switchboard'] .switchboard-wrap {
 .perm-card-status-error {
   color: #f85149;
 }
+
+.bus-filters {
+  display: flex;
+  gap: 12px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+.bus-filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
