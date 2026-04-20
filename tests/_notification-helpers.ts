@@ -1,18 +1,12 @@
 import { mock } from 'bun:test'
+import { createNotifications } from '../dashboard/notifications.js'
 
 // Minimal DOM-ish interfaces — the project doesn't pull in TS's DOM lib, so we
-// declare the shapes the notifications module needs right here. `ctx` carries
-// concrete test types (not `unknown`) so individual tests can mutate e.g.
-// `ctx.doc.hidden` without casts.
+// declare the shapes the notifications module needs right here.
 interface NotificationOptionsLike {
   body?: string
   tag?: string
   data?: unknown
-}
-interface StorageLike {
-  getItem(k: string): string | null
-  setItem(k: string, v: string): void
-  removeItem(k: string): void
 }
 interface DocumentLike {
   hidden: boolean
@@ -21,100 +15,124 @@ interface WindowLike {
   focus(): void
 }
 
-class FakeNotificationBase {
-  static permission: 'default' | 'granted' | 'denied' = 'granted'
-  static requestPermission = mock(async () => FakeNotificationBase.permission)
-  title = ''
-  tag?: string
-  data?: unknown
-  onclick: ((ev: unknown) => void) | null = null
-  close(): void {}
+export interface MockShown {
+  title: string
+  options: NotificationOptionsLike
 }
 
-export type FakeNotificationCtor = typeof FakeNotificationBase & {
-  new (title: string, options?: NotificationOptionsLike): FakeNotificationBase
-}
-
-export interface NotificationTestCtx {
-  NotificationCtor: FakeNotificationCtor | undefined
-  localStorage: StorageLike
-  doc: DocumentLike
-  win: WindowLike & { focus: ReturnType<typeof mock> }
-  sendWsFrame: (frame: unknown) => void
-  getCurrentRoute: () => string
-  navigate: ReturnType<typeof mock>
-  fetch: (url: string) => Promise<{ ok: boolean; json: () => Promise<unknown> }>
-}
-
-export function mockDeps(overrides: Partial<NotificationTestCtx> = {}): {
-  ctx: NotificationTestCtx
-  fired: Array<{ title: string; options: NotificationOptionsLike }>
+export function mockDeps(
+  overrides: Partial<{
+    permission: 'default' | 'granted' | 'denied'
+    hidden: boolean
+    route: string
+    fetch: typeof fetch
+    NotificationPermission: undefined
+  }> = {},
+): {
+  notif: ReturnType<typeof createNotifications>
+  shown: MockShown[]
   closed: string[]
   wsSends: unknown[]
-  FakeNotification: FakeNotificationCtor
   doc: DocumentLike
   win: WindowLike & { focus: ReturnType<typeof mock> }
-  instances: FakeNotificationBase[]
   fetchCalls: string[]
   setFetchResponse: (r: unknown) => void
+  setPermission: (p: 'default' | 'granted' | 'denied') => void
+  setRoute: (r: string) => void
 } {
+  const shown: MockShown[] = []
+  const closed: string[] = []
+
+  const fakeRegistration = {
+    showNotification: (title: string, options: NotificationOptionsLike) => {
+      shown.push({ title, options })
+      return Promise.resolve()
+    },
+    getNotifications: async ({ tag }: { tag: string }) => {
+      return shown
+        .filter((s) => s.options.tag === tag)
+        .map((s) => ({
+          tag: s.options.tag,
+          close: () => closed.push(s.options.tag as string),
+        }))
+    },
+  }
+
+  let perm: 'default' | 'granted' | 'denied' = overrides.permission ?? 'granted'
+  const NotificationPermission =
+    overrides.NotificationPermission === undefined && 'NotificationPermission' in overrides
+      ? undefined
+      : {
+          get permission() {
+            return perm as NotificationPermission
+          },
+          async requestPermission() {
+            return perm as NotificationPermission
+          },
+        }
+
   const store = new Map<string, string>()
-  const localStorage: StorageLike = {
+  const localStorage: Storage = {
     getItem: (k: string) => store.get(k) ?? null,
     setItem: (k: string, v: string) => void store.set(k, v),
     removeItem: (k: string) => void store.delete(k),
+    clear: () => store.clear(),
+    key: (i: number) => [...store.keys()][i] ?? null,
+    get length() {
+      return store.size
+    },
   }
-  const fired: Array<{ title: string; options: NotificationOptionsLike }> = []
-  const closed: string[] = []
-  const instances: FakeNotificationBase[] = []
-  class FakeNotification extends FakeNotificationBase {
-    constructor(title: string, options: NotificationOptionsLike = {}) {
-      super()
-      this.title = title
-      this.tag = options.tag
-      this.data = options.data
-      fired.push({ title, options })
-      instances.push(this)
-    }
-    override close(): void {
-      if (this.tag) closed.push(this.tag)
-    }
-  }
-  const doc: DocumentLike = { hidden: false }
+
+  const doc: DocumentLike = { hidden: overrides.hidden ?? false }
   const win: WindowLike & { focus: ReturnType<typeof mock> } = { focus: mock(() => {}) }
   const wsSends: unknown[] = []
   const fetchCalls: string[] = []
   let fetchResponse: unknown = []
-  const fetchMock = mock(async (url: string) => {
-    fetchCalls.push(url)
-    return {
-      ok: true,
-      json: async () => fetchResponse,
-    }
-  })
-  const ctx: NotificationTestCtx = {
-    NotificationCtor: FakeNotification as unknown as FakeNotificationCtor,
+  const fetchMock =
+    overrides.fetch ??
+    (mock(async (url: string) => {
+      fetchCalls.push(url)
+      return {
+        ok: true,
+        json: async () => fetchResponse,
+      }
+    }) as unknown as typeof fetch)
+
+  let currentRoute = overrides.route ?? '/switchboard'
+
+  const notif = createNotifications({
+    swRegistration: Promise.resolve(fakeRegistration as unknown as ServiceWorkerRegistration),
+    NotificationPermission: NotificationPermission as
+      | {
+          permission: NotificationPermission
+          requestPermission: () => Promise<NotificationPermission>
+        }
+      | undefined,
     localStorage,
-    doc,
-    win,
+    doc: doc as Document,
+    win: win as unknown as Window,
     sendWsFrame: (frame: unknown) => void wsSends.push(frame),
-    getCurrentRoute: () => '/switchboard',
+    getCurrentRoute: () => currentRoute,
     navigate: mock((_route: string) => {}),
     fetch: fetchMock,
-    ...overrides,
-  }
+  })
+
   return {
-    ctx,
-    fired,
+    notif,
+    shown,
     closed,
     wsSends,
-    FakeNotification: FakeNotification as unknown as FakeNotificationCtor,
     doc,
     win,
-    instances,
     fetchCalls,
     setFetchResponse: (r: unknown) => {
       fetchResponse = r
+    },
+    setPermission: (p: 'default' | 'granted' | 'denied') => {
+      perm = p
+    },
+    setRoute: (r: string) => {
+      currentRoute = r
     },
   }
 }
