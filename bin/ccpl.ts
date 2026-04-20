@@ -1,0 +1,321 @@
+#!/usr/bin/env bun
+// ccpl — Party Line session manager + launcher.
+
+import {
+  mkdirSync,
+  chmodSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  unlinkSync,
+} from 'node:fs'
+import { homedir } from 'node:os'
+import { join, resolve, dirname } from 'node:path'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { createInterface } from 'node:readline'
+
+// Accept self-signed certs for localhost dashboards.
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = process.env.NODE_TLS_REJECT_UNAUTHORIZED ?? '0'
+
+const RAW_URL = process.env.PARTY_LINE_SWITCHBOARD_URL || 'https://localhost:3400'
+const SWITCHBOARD = RAW_URL.replace(/^wss?:\/\//, 'https://').replace(/\/ws\/.*$/, '')
+
+function switchboardWssUrl(): string {
+  return SWITCHBOARD.replace(/^https?:\/\//, 'wss://') + '/ws/session'
+}
+
+const CFG_DIR = join(homedir(), '.config', 'party-line')
+const SESS_DIR = join(CFG_DIR, 'sessions')
+
+const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$/
+
+function tokenPath(name: string): string {
+  return join(SESS_DIR, `${name}.token`)
+}
+
+function readToken(name: string): string | null {
+  try {
+    return readFileSync(tokenPath(name), 'utf8').trim()
+  } catch {
+    return null
+  }
+}
+
+function writeToken(name: string, token: string): void {
+  mkdirSync(SESS_DIR, { recursive: true, mode: 0o700 })
+  chmodSync(SESS_DIR, 0o700)
+  writeFileSync(tokenPath(name), token, { mode: 0o600 })
+}
+
+function removeToken(name: string): void {
+  try {
+    unlinkSync(tokenPath(name))
+  } catch {
+    /* ignore */
+  }
+}
+
+function die(msg: string, code = 1): never {
+  console.error(msg)
+  process.exit(code)
+}
+
+function validateName(name: string): void {
+  if (!NAME_RE.test(name)) {
+    die(
+      `Invalid name '${name}'. Names must match ${NAME_RE.source} (start with alphanumeric, 1-63 chars, allows . _ -).`,
+    )
+  }
+}
+
+async function api(
+  path: string,
+  init: RequestInit = {},
+  token?: string,
+): Promise<Response> {
+  const headers = new Headers(init.headers as HeadersInit | undefined)
+  if (!headers.has('Content-Type') && init.body) {
+    headers.set('Content-Type', 'application/json')
+  }
+  if (token) headers.set('X-Party-Line-Token', token)
+  return fetch(SWITCHBOARD + path, { ...init, headers })
+}
+
+function mcpConfigPath(): string | null {
+  // Try <binDir>/../.mcp.json (dev layout) first.
+  const binDir = dirname(fileURLToPath(import.meta.url))
+  const dev = resolve(binDir, '..', '.mcp.json')
+  if (existsSync(dev)) return dev
+  return null
+}
+
+async function cmdNew(name: string, cwdOverride?: string): Promise<void> {
+  validateName(name)
+  const cwd = cwdOverride ? resolve(cwdOverride) : process.cwd()
+  const res = await api('/ccpl/register', {
+    method: 'POST',
+    body: JSON.stringify({ name, cwd }),
+  })
+  if (res.status === 409) die(`Session '${name}' already exists. Run 'ccpl forget ${name}' first.`)
+  if (!res.ok) die(`Register failed: ${res.status} ${await res.text()}`)
+  const body = (await res.json()) as { token: string }
+  writeToken(name, body.token)
+  console.log(`Registered '${name}' at ${cwd}.`)
+  console.log(`Token stored at ${tokenPath(name)} (chmod 600).`)
+  console.log(`Run 'ccpl ${name}' to launch.`)
+}
+
+function jsonlPathForCwdUuid(cwd: string, uuid: string): string {
+  const encoded = cwd.replace(/\//g, '-')
+  return join(homedir(), '.claude', 'projects', encoded, `${uuid}.jsonl`)
+}
+
+function promptYn(q: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  return new Promise((resolvePromise) => {
+    rl.question(q, (ans) => {
+      rl.close()
+      const a = ans.trim().toLowerCase()
+      resolvePromise(a === '' || a === 'y' || a === 'yes')
+    })
+  })
+}
+
+async function cmdLaunch(name: string): Promise<void> {
+  validateName(name)
+  const token = readToken(name)
+  if (!token) die(`No session named '${name}'. Use 'ccpl new ${name}' to create it.`)
+  const res = await api(`/ccpl/session/${encodeURIComponent(name)}`, {}, token)
+  if (res.status === 401) die(`Token rejected for '${name}'. Try 'ccpl rotate ${name}'.`)
+  if (!res.ok) die(`Lookup failed: ${res.status} ${await res.text()}`)
+  const row = (await res.json()) as { cwd: string; cc_session_uuid: string | null }
+
+  try {
+    process.chdir(row.cwd)
+  } catch (err) {
+    die(`Cannot chdir to ${row.cwd}: ${String(err)}`)
+  }
+
+  if (process.env.TMUX) {
+    try {
+      spawn('tmux', ['rename-window', name], { stdio: 'ignore' }).unref()
+    } catch {
+      /* ignore */
+    }
+  }
+
+  let resumeUuid: string | null = null
+  if (row.cc_session_uuid) {
+    const jsonl = jsonlPathForCwdUuid(row.cwd, row.cc_session_uuid)
+    if (existsSync(jsonl)) {
+      resumeUuid = row.cc_session_uuid
+    } else {
+      const yes = await promptYn(
+        `No resumable CC session for '${name}' (UUID ${row.cc_session_uuid} not found). Archive prior history and start fresh? [Y/n] `,
+      )
+      if (!yes) process.exit(0)
+      const archRes = await api(
+        `/ccpl/archive`,
+        { method: 'POST', body: JSON.stringify({ name, reason: 'jsonl_missing' }) },
+        token,
+      )
+      if (!archRes.ok) die(`Archive failed: ${archRes.status}`)
+    }
+  }
+
+  const baseArgs = [
+    '--dangerously-skip-permissions',
+    '--dangerously-load-development-channels',
+    'server:party-line',
+    '--name',
+    name,
+  ]
+  const mcp = mcpConfigPath()
+  if (mcp) {
+    baseArgs.splice(1, 0, '--mcp-config', mcp)
+  } else {
+    console.warn('[ccpl] No .mcp.json found alongside the ccpl binary; --mcp-config flag omitted.')
+  }
+  if (resumeUuid) {
+    baseArgs.push('--resume', resumeUuid)
+  }
+
+  const env = {
+    ...process.env,
+    PARTY_LINE_TOKEN: token,
+    PARTY_LINE_SWITCHBOARD_URL: switchboardWssUrl(),
+  }
+
+  const child = spawn('claude', baseArgs, { stdio: 'inherit', env })
+  child.on('exit', (code) => process.exit(code ?? 0))
+}
+
+async function loginCookie(): Promise<string | null> {
+  const pw = process.env.PARTY_LINE_DASHBOARD_PASSWORD
+  if (!pw) return null
+  const res = await fetch(SWITCHBOARD + '/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pw }),
+  })
+  if (!res.ok) return null
+  const setCookie = res.headers.get('set-cookie') || ''
+  const match = setCookie.match(/pl_dash=([^;]+)/)
+  return match ? `pl_dash=${match[1]}` : null
+}
+
+async function cmdList(asJson: boolean): Promise<void> {
+  const cookie = await loginCookie()
+  if (!cookie) {
+    die(
+      'list requires PARTY_LINE_DASHBOARD_PASSWORD to be set (or an active browser session). Otherwise the dashboard will refuse access.',
+    )
+  }
+  const res = await fetch(SWITCHBOARD + '/ccpl/sessions', {
+    headers: { cookie },
+  })
+  if (!res.ok) die(`List failed: ${res.status} ${await res.text()}`)
+  const { sessions } = (await res.json()) as {
+    sessions: Array<{
+      name: string
+      cwd: string
+      cc_session_uuid: string | null
+      online: boolean
+    }>
+  }
+  if (asJson) {
+    console.log(JSON.stringify(sessions, null, 2))
+    return
+  }
+  console.log('NAME'.padEnd(16) + 'STATE'.padEnd(10) + 'CWD'.padEnd(40) + 'CC_UUID')
+  for (const s of sessions) {
+    const state = s.online ? 'live' : 'offline'
+    console.log(
+      `${s.name.padEnd(16)}${state.padEnd(10)}${String(s.cwd).padEnd(40)}${s.cc_session_uuid || '-'}`,
+    )
+  }
+}
+
+async function cmdForget(name: string): Promise<void> {
+  validateName(name)
+  const token = readToken(name)
+  if (!token) {
+    removeToken(name)
+    console.log(`(no local token for '${name}'; nothing to remove)`)
+    return
+  }
+  const res = await api(`/ccpl/session/${encodeURIComponent(name)}`, { method: 'DELETE' }, token)
+  if (!res.ok && res.status !== 401) {
+    die(`Forget failed: ${res.status} ${await res.text()}`)
+  }
+  removeToken(name)
+  console.log(`Forgot '${name}'.`)
+}
+
+async function cmdRotate(name: string): Promise<void> {
+  validateName(name)
+  const token = readToken(name)
+  if (!token) die(`No token on disk for '${name}'.`)
+  const res = await api(
+    `/ccpl/session/${encodeURIComponent(name)}/rotate`,
+    { method: 'POST' },
+    token,
+  )
+  if (!res.ok) die(`Rotate failed: ${res.status} ${await res.text()}`)
+  const { token: newToken } = (await res.json()) as { token: string }
+  writeToken(name, newToken)
+  console.log(`Rotated token for '${name}'.`)
+}
+
+function printHelp(): void {
+  console.log(`Usage:
+  ccpl new <name> [--cwd DIR]    Register a new session
+  ccpl list [--json]             List all sessions (requires PARTY_LINE_DASHBOARD_PASSWORD)
+  ccpl forget <name>             Delete a session and its token
+  ccpl rotate <name>             Rotate the token for a session
+  ccpl <name>                    Launch Claude Code with this session
+
+Environment:
+  PARTY_LINE_SWITCHBOARD_URL     Base URL of the dashboard (default: https://localhost:3400)
+  PARTY_LINE_DASHBOARD_PASSWORD  Password for 'list' command
+  NODE_TLS_REJECT_UNAUTHORIZED   Defaults to '0' to accept self-signed certs`)
+}
+
+async function main(): Promise<void> {
+  const [sub, ...rest] = process.argv.slice(2)
+  if (!sub || sub === '-h' || sub === '--help') {
+    printHelp()
+    process.exit(sub ? 0 : 1)
+  }
+  if (sub === 'new') {
+    const name = rest[0]
+    if (!name) die('Usage: ccpl new <name> [--cwd DIR]')
+    const cwdIdx = rest.indexOf('--cwd')
+    const cwd = cwdIdx >= 0 ? rest[cwdIdx + 1] : undefined
+    await cmdNew(name, cwd)
+    return
+  }
+  if (sub === 'list') {
+    await cmdList(rest.includes('--json'))
+    return
+  }
+  if (sub === 'forget') {
+    const name = rest[0]
+    if (!name) die('Usage: ccpl forget <name>')
+    await cmdForget(name)
+    return
+  }
+  if (sub === 'rotate') {
+    const name = rest[0]
+    if (!name) die('Usage: ccpl rotate <name>')
+    await cmdRotate(name)
+    return
+  }
+  await cmdLaunch(sub)
+}
+
+main().catch((err) => {
+  console.error(err)
+  process.exit(1)
+})
