@@ -13,7 +13,11 @@ import { join, dirname, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { PartyLineMonitor } from './monitor.js'
 import { startQuotaPoller, stopQuotaPoller, getQuota } from './quota.js'
-import { buildPermissionRequestFrame } from './serve-helpers.js'
+import {
+  buildPermissionRequestFrame,
+  validatePermissionResponseBody,
+  buildPermissionResponseEnvelope,
+} from './serve-helpers.js'
 import type { Envelope } from '../src/types.js'
 import type { ServerWebSocket } from 'bun'
 import { openDb } from '../src/storage/db.js'
@@ -220,6 +224,40 @@ const server = Bun.serve({
     // REST API: quota status
     if (url.pathname === '/api/quota') {
       return Response.json(getQuota() ?? { error: 'no data yet' })
+    }
+
+    // REST API: permission response — forward user decision to target session via UDP
+    if (url.pathname === '/api/permission-response' && req.method === 'POST') {
+      return (async () => {
+        let body: unknown
+        try {
+          body = await req.json()
+        } catch {
+          return Response.json({ error: 'invalid JSON' }, { status: 400 })
+        }
+        const result = validatePermissionResponseBody(body)
+        if (!result.ok) {
+          return Response.json({ error: result.error }, { status: 400 })
+        }
+        const envelope = buildPermissionResponseEnvelope({
+          from: NAME,
+          session: result.value.session,
+          request_id: result.value.request_id,
+          behavior: result.value.behavior,
+        })
+        await monitor.sendEnvelope(envelope)
+        const resolvedFrame = JSON.stringify({
+          type: 'permission-resolved',
+          data: {
+            session: result.value.session,
+            request_id: result.value.request_id,
+            behavior: result.value.behavior,
+            resolved_by: NAME,
+          },
+        })
+        for (const ws of wsClients) ws.send(resolvedFrame)
+        return Response.json({ ok: true })
+      })()
     }
 
     // REST API: message history

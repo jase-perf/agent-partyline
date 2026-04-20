@@ -66,6 +66,13 @@ export class PartyLineMonitor {
     return envelope
   }
 
+  /** Send a pre-built envelope (e.g. constructed by a helper). */
+  async sendEnvelope(envelope: Envelope): Promise<Envelope> {
+    await this.transport.send(envelope)
+    this.history.push(envelope)
+    return envelope
+  }
+
   /** Respond to a request by callback_id. */
   async respond(to: string, callbackId: string, body: string): Promise<Envelope> {
     const envelope = createEnvelope(this.sessionName, to, 'response', body, null, callbackId)
