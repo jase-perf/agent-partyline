@@ -12,6 +12,24 @@ let contextOverrides = {}
 let lastSessions = []
 let sessionsReady = false
 let pendingRouteState = null // if set, applyRoute will re-fire once sessions arrive
+
+// Service Worker registration promise. Used by notifications.js to call
+// registration.showNotification(). Null if SW isn't supported (e.g. non-secure
+// context on older browsers).
+let swRegistration = null
+
+if ('serviceWorker' in navigator) {
+  swRegistration = navigator.serviceWorker
+    .register('/sw.js', { scope: '/' })
+    .then((reg) => {
+      console.log('[sw] registered scope:', reg.scope)
+      return reg
+    })
+    .catch((err) => {
+      console.error('[sw] registration failed:', err)
+      return null
+    })
+}
 let sessionSources = {} // session name -> source string, populated from session-update events
 let currentView = 'switchboard'
 let localMachineId = null
@@ -1966,38 +1984,23 @@ window.doBusSend = doBusSend
 window.doDetailSend = doDetailSend
 
 const notif = createNotifications({
-  NotificationCtor: typeof Notification !== 'undefined' ? Notification : undefined,
+  swRegistration,
+  NotificationPermission: typeof Notification !== 'undefined' ? Notification : undefined,
   localStorage: window.localStorage,
   doc: document,
   win: window,
   sendWsFrame: (frame) => {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(frame))
   },
-  getCurrentRoute: () => {
-    const parsed = parseUrl()
-    if (parsed.view === 'session-detail' && parsed.sessionName) {
-      return '/session/' + parsed.sessionName
-    }
-    if (parsed.view === 'history') {
-      return parsed.subtab && parsed.subtab !== 'events' ? '/history/' + parsed.subtab : '/history'
-    }
-    return '/switchboard'
-  },
+  getCurrentRoute: () => window.location.pathname,
   navigate: (route) => {
-    // Accept routes with or without a leading '#' (e.g. '/#/session/foo' or '/session/foo').
-    const clean = String(route || '').replace(/^\/?#\/?/, '/')
-    const sm = clean.match(/^\/session\/([^/]+)/)
-    if (sm) {
-      navigate({ view: 'session-detail', sessionName: decodeURIComponent(sm[1]), agentId: null })
-      return
-    }
-    if (clean.startsWith('/history')) {
-      navigate({ view: 'history' })
-      return
-    }
-    navigate({ view: 'switchboard' })
+    // Accept '/#/session/foo' or '/session/foo'
+    const cleaned = route.replace(/^\/#/, '')
+    const m = cleaned.match(/^\/session\/(.+)$/)
+    if (m) navigate({ view: 'session-detail', sessionName: decodeURIComponent(m[1]) })
+    else navigate({ view: 'switchboard' })
   },
-  fetch: (url) => fetch(url),
+  fetch: window.fetch.bind(window),
 })
 
 // Apply the initial route from URL
