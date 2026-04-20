@@ -272,4 +272,281 @@ describe('buildTranscript', () => {
     expect(entries.some((e) => e.type === 'party-line-send' && e.other_session === 'research')).toBe(true)
     expect(entries.some((e) => e.type === 'party-line-receive' && e.other_session === 'research')).toBe(true)
   })
+
+  // ---------------------------------------------------------------------------
+  // Bug 1: synthetic user entries (plugin-injected / tool descriptions) must
+  // not render as real user-typed messages. Claude Code marks these with
+  // isMeta: true at the top-level of the JSONL line, and some also carry
+  // <system-reminder> wrappers in content.
+  // ---------------------------------------------------------------------------
+
+  test('filters out isMeta:true user entries (plugin-injected / synthetic)', () => {
+    const cwdDir = join(projectsRoot, '-home-x')
+    mkdirSync(cwdDir, { recursive: true })
+
+    // Simulate the real Claude Code JSONL shape: top-level type/isMeta + nested message.
+    const lines = [
+      // Real user message
+      {
+        type: 'user',
+        message: { role: 'user', content: 'What does this plugin do?' },
+        uuid: 'u-real-1',
+        timestamp: '2026-04-20T00:00:01Z',
+      },
+      // Assistant text reply (should survive)
+      {
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Here is the answer.' }] },
+        uuid: 'a-1',
+        timestamp: '2026-04-20T00:00:02Z',
+      },
+      // Synthetic/meta user entry — plugin injecting a big skill description.
+      // This should NOT render as a user-typed message.
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text:
+                'Base directory for this skill: /home/claude/.claude/plugins/' +
+                'cache/claude-plugins-official/superpowers/5.0.7/skills/writing-plans\n' +
+                '# Writing Plans\n## Overview\n' +
+                'Write comprehensive implementation plans...' +
+                'x'.repeat(5000),
+            },
+          ],
+        },
+        isMeta: true,
+        uuid: 'u-meta-1',
+        timestamp: '2026-04-20T00:00:03Z',
+      },
+      // Synthetic/meta user entry with a plain-string <system-reminder> content
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content:
+            '<system-reminder>Respond with just the action or changes.</system-reminder>',
+        },
+        isMeta: true,
+        uuid: 'u-meta-2',
+        timestamp: '2026-04-20T00:00:04Z',
+      },
+    ]
+
+    writeFileSync(
+      join(cwdDir, 'sess-meta.jsonl'),
+      lines.map((r) => JSON.stringify(r)).join('\n') + '\n',
+    )
+
+    const entries = buildTranscript({ projectsRoot, sessionId: 'sess-meta', limit: 100 })
+
+    // Only the real user message + assistant text should be rendered as normal.
+    const userEntries = entries.filter((e) => e.type === 'user')
+    expect(userEntries.length).toBe(1)
+    expect(userEntries[0]!.text).toBe('What does this plugin do?')
+
+    // The assistant text must still be present
+    expect(entries.some((e) => e.type === 'assistant-text' && e.text === 'Here is the answer.')).toBe(true)
+
+    // The giant skill description and system-reminder must NOT appear as user text.
+    const bleed = entries.find(
+      (e) => e.type === 'user' && typeof e.text === 'string' && e.text.includes('Writing Plans'),
+    )
+    expect(bleed).toBeUndefined()
+    const sysReminderBleed = entries.find(
+      (e) => e.type === 'user' && typeof e.text === 'string' && e.text.includes('<system-reminder>'),
+    )
+    expect(sysReminderBleed).toBeUndefined()
+  })
+
+  // ---------------------------------------------------------------------------
+  // Bug 2: post-compaction ordering / stable identity.
+  //
+  // The dashboard's incremental-append logic relies on `after_uuid` + a
+  // client-side set of rendered uuids. If uuids are randomly regenerated on
+  // every buildTranscript call, incremental fetches can't dedup correctly —
+  // especially after a compaction-triggered reset — and stale context
+  // re-hydrated by plugins lands as "new" entries below the current message.
+  //
+  // Fix requires uuids (and timestamps) to be STABLE across repeated calls
+  // on the same JSONL content.
+  // ---------------------------------------------------------------------------
+
+  test('buildTranscript produces stable uuids + timestamps across repeated calls', () => {
+    const cwdDir = join(projectsRoot, '-home-x')
+    mkdirSync(cwdDir, { recursive: true })
+
+    const lines = [
+      {
+        type: 'user',
+        message: { role: 'user', content: 'hi' },
+        uuid: 'line-u1',
+        timestamp: '2026-04-20T00:00:01Z',
+      },
+      {
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+        uuid: 'line-a1',
+        timestamp: '2026-04-20T00:00:02Z',
+      },
+    ]
+    writeFileSync(
+      join(cwdDir, 'sess-stable.jsonl'),
+      lines.map((r) => JSON.stringify(r)).join('\n') + '\n',
+    )
+
+    const first = buildTranscript({ projectsRoot, sessionId: 'sess-stable', limit: 100 })
+    const second = buildTranscript({ projectsRoot, sessionId: 'sess-stable', limit: 100 })
+
+    expect(first.length).toBe(2)
+    expect(second.length).toBe(2)
+    // uuids must be deterministic so the client's renderedEntryKeys dedup works
+    expect(second[0]!.uuid).toBe(first[0]!.uuid)
+    expect(second[1]!.uuid).toBe(first[1]!.uuid)
+    // timestamps must come from the JSONL record, not Date.now()
+    expect(first[0]!.ts).toBe('2026-04-20T00:00:01Z')
+    expect(first[1]!.ts).toBe('2026-04-20T00:00:02Z')
+  })
+
+  test('after_uuid filtering works across two sequential buildTranscript calls (the incremental-fetch path)', () => {
+    // This is the real scenario: client fetches once, remembers lastRenderedUuid,
+    // then fetches again with ?after_uuid=<prev>. If uuids aren't stable, every
+    // incremental fetch returns the full list and the client duplicates the
+    // whole transcript below the existing DOM.
+    const cwdDir = join(projectsRoot, '-home-x')
+    mkdirSync(cwdDir, { recursive: true })
+
+    const lines = [
+      {
+        type: 'user',
+        message: { role: 'user', content: 'first turn' },
+        uuid: 'line-1',
+        timestamp: '2026-04-20T00:00:01Z',
+      },
+      {
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'response' }] },
+        uuid: 'line-2',
+        timestamp: '2026-04-20T00:00:02Z',
+      },
+    ]
+    writeFileSync(
+      join(cwdDir, 'sess-incr.jsonl'),
+      lines.map((r) => JSON.stringify(r)).join('\n') + '\n',
+    )
+
+    const firstBuild = buildTranscript({ projectsRoot, sessionId: 'sess-incr', limit: 100 })
+    const lastRenderedUuid = firstBuild[firstBuild.length - 1]!.uuid
+
+    // Simulate an incremental fetch using the uuid we remembered.
+    const secondBuild = buildTranscript({ projectsRoot, sessionId: 'sess-incr', limit: 100 })
+    const incremental = filterAfterUuid(secondBuild, lastRenderedUuid)
+
+    // No new content → incremental slice is empty, NOT the full list.
+    expect(incremental.length).toBe(0)
+  })
+
+  test('after compaction (file rewritten shorter), incremental fetch returns only post-compaction entries', () => {
+    // Reporter's symptom: post-compaction, the dashboard sees the current
+    // question at top, then 300 older entries re-rendered below. Root cause:
+    // after compaction the file is a fresh set of records, and the client's
+    // stale lastRenderedUuid from the OLD file is still sent up. The server's
+    // filterAfterUuid returns the full list as graceful fallback — which is
+    // correct — and the client must then re-render from scratch rather than
+    // appending below existing content. This test pins down the server-side
+    // contract: when after_uuid is unknown (stale across a rewrite), the
+    // server returns the full post-compaction transcript with stable uuids,
+    // and the client can safely replace its state with that list.
+    const cwdDir = join(projectsRoot, '-home-x')
+    mkdirSync(cwdDir, { recursive: true })
+
+    // Pre-compaction transcript
+    const preCompactLines = [
+      { type: 'user', message: { role: 'user', content: 'old q1' },
+        uuid: 'old-u1', timestamp: '2026-04-20T00:00:01Z' },
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'old a1' }] },
+        uuid: 'old-a1', timestamp: '2026-04-20T00:00:02Z' },
+      { type: 'user', message: { role: 'user', content: 'old q2' },
+        uuid: 'old-u2', timestamp: '2026-04-20T00:00:03Z' },
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'old a2' }] },
+        uuid: 'old-a2', timestamp: '2026-04-20T00:00:04Z' },
+    ]
+    writeFileSync(
+      join(cwdDir, 'sess-compact.jsonl'),
+      preCompactLines.map((r) => JSON.stringify(r)).join('\n') + '\n',
+    )
+
+    const preBuild = buildTranscript({ projectsRoot, sessionId: 'sess-compact', limit: 100 })
+    const staleUuid = preBuild[preBuild.length - 1]!.uuid
+
+    // Compaction: rewrite file with a fresh summary + current question
+    const postCompactLines = [
+      { type: 'user', message: { role: 'user', content: '[summary of previous conversation]' },
+        uuid: 'new-summary', timestamp: '2026-04-20T00:05:00Z', isMeta: true },
+      { type: 'user', message: { role: 'user', content: 'the current question' },
+        uuid: 'new-u1', timestamp: '2026-04-20T00:05:01Z' },
+    ]
+    writeFileSync(
+      join(cwdDir, 'sess-compact.jsonl'),
+      postCompactLines.map((r) => JSON.stringify(r)).join('\n') + '\n',
+    )
+
+    const postBuild = buildTranscript({ projectsRoot, sessionId: 'sess-compact', limit: 100 })
+    // isMeta summary is filtered → only 'the current question' remains
+    expect(postBuild.length).toBe(1)
+    expect(postBuild[0]!.text).toBe('the current question')
+
+    // Client sends after_uuid=<staleUuid from pre-compaction>. Server falls
+    // back to full list (not found). Client MUST receive exactly the post-
+    // compaction entries — no pre-compaction content.
+    const incremental = filterAfterUuid(postBuild, staleUuid)
+    expect(incremental.length).toBe(1)
+    expect(incremental[0]!.text).toBe('the current question')
+
+    // Must NOT contain any pre-compaction user text
+    expect(incremental.some((e) => e.text === 'old q1' || e.text === 'old q2')).toBe(false)
+  })
+
+  test('filters tool_result content whose text is a <system-reminder> (no orphan user render)', () => {
+    // Tool_result with <system-reminder> content arrives as a user entry with
+    // content array holding a tool_result block. buildTranscript already merges
+    // these with the pending tool_use — but we must not render them as a bare
+    // user text block if the tool_use was missing (edge case from truncation).
+    const cwdDir = join(projectsRoot, '-home-x')
+    mkdirSync(cwdDir, { recursive: true })
+
+    const lines = [
+      // User entry carrying ONLY a tool_result whose tool_use_id is unknown
+      // (orphaned — e.g., after compaction dropped the tool_use half).
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'missing-id',
+              content: '<system-reminder>Warning: something happened.</system-reminder>',
+            },
+          ],
+        },
+        uuid: 'u-orphan-1',
+        timestamp: '2026-04-20T00:00:01Z',
+      },
+    ]
+
+    writeFileSync(
+      join(cwdDir, 'sess-orphan.jsonl'),
+      lines.map((r) => JSON.stringify(r)).join('\n') + '\n',
+    )
+
+    const entries = buildTranscript({ projectsRoot, sessionId: 'sess-orphan', limit: 100 })
+
+    // Orphan tool_result must NOT leak into a user-typed entry.
+    const userEntries = entries.filter((e) => e.type === 'user')
+    expect(userEntries.length).toBe(0)
+  })
 })

@@ -90,6 +90,24 @@ type ContentBlock =
 interface JsonlRecord {
   role?: 'user' | 'assistant'
   content?: string | ContentBlock[]
+  /**
+   * True when Claude Code injected this record synthetically — plugin skill
+   * descriptions, local-command-caveat blocks, post-tool system reminders,
+   * etc. These MUST NOT render as user-typed messages in the transcript UI.
+   *
+   * Carried up from the top-level JSONL line (`{type, message, isMeta}`)
+   * into our flattened record so recordToEntries can drop them.
+   */
+  isMeta?: boolean
+  /**
+   * Stable identifier from the JSONL line (`line.uuid`). Hoisted here so that
+   * recordToEntries can emit deterministic TranscriptEntry uuids — required
+   * for the dashboard's incremental after_uuid fetch + renderedEntryKeys
+   * dedup to function across repeated buildTranscript calls.
+   */
+  lineUuid?: string
+  /** Stable timestamp from the JSONL line (`line.timestamp`). */
+  lineTs?: string
 }
 
 /** Raw line from Claude Code JSONL — may wrap the message in a `message` field. */
@@ -98,11 +116,28 @@ interface RawJsonlLine {
   role?: 'user' | 'assistant'
   content?: string | ContentBlock[]
   message?: JsonlRecord
+  /** Top-level synthetic marker — see JsonlRecord.isMeta. */
+  isMeta?: boolean
+  /** Stable per-line identifier written by Claude Code. */
+  uuid?: string
+  /** ISO timestamp written by Claude Code for this JSONL line. */
+  timestamp?: string
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * True when a string is a bare <system-reminder>…</system-reminder> wrapper
+ * with no surrounding user prose. Used to reject synthetic injections that
+ * lack the top-level isMeta marker (defensive fallback).
+ */
+function isSystemReminderString(text: string): boolean {
+  if (typeof text !== 'string') return false
+  const trimmed = text.trim()
+  return trimmed.startsWith('<system-reminder>') && trimmed.endsWith('</system-reminder>')
+}
 
 /**
  * For each subdir of projectsRoot, check if <slug>/<sessionId>.jsonl exists.
@@ -150,8 +185,16 @@ function readJsonlLines(path: string): JsonlRecord[] {
     try {
       const parsed = JSON.parse(trimmed) as RawJsonlLine
       // Claude Code wraps conversation turns as {type:"user"|"assistant", message:{role,content}}
+      // The top-level carries the synthetic marker `isMeta` plus the stable
+      // per-line `uuid` and `timestamp`. Hoist all three onto the flattened
+      // record so downstream code can (a) drop synthetic plugin content and
+      // (b) emit deterministic entries for incremental fetch dedup.
       if (parsed.message?.role !== undefined) {
-        records.push(parsed.message)
+        const rec: JsonlRecord = { ...parsed.message }
+        if (parsed.isMeta) rec.isMeta = true
+        if (parsed.uuid) rec.lineUuid = parsed.uuid
+        if (parsed.timestamp) rec.lineTs = parsed.timestamp
+        records.push(rec)
       } else if (parsed.role !== undefined) {
         records.push(parsed as JsonlRecord)
       }
@@ -239,20 +282,38 @@ function recordToEntries(
   sessionId: string,
 ): TranscriptEntry[] {
   const entries: TranscriptEntry[] = []
-  const now = new Date().toISOString()
+  // Prefer the stable per-line identifiers captured from the JSONL wrapper so
+  // that repeated buildTranscript calls produce identical entries — required
+  // for incremental fetch dedup. Fall back to random values for tests or
+  // records that don't carry the Claude Code envelope.
+  const lineUuid = rec.lineUuid ?? randomUUID()
+  const ts = rec.lineTs ?? new Date().toISOString()
+  // For multi-block content we suffix the line uuid with the block index so
+  // every emitted entry still has a unique-but-deterministic uuid.
+  const entryUuid = (blockIdx: number): string =>
+    rec.lineUuid ? `${lineUuid}#${blockIdx}` : lineUuid
 
   if (rec.role === 'user') {
+    // Drop synthetic user records — plugin skill descriptions, caveats,
+    // <system-reminder> injections, local-command wrappers. Claude Code flags
+    // these with isMeta:true at the top level of the JSONL line; they should
+    // never appear as user-typed text in the dashboard transcript.
+    if (rec.isMeta) return entries
+
     if (typeof rec.content === 'string') {
-      // Simple string content
-      entries.push({ uuid: randomUUID(), ts: now, type: 'user', text: rec.content })
+      // Even without isMeta, a bare <system-reminder>… string is never real
+      // user input — skip it as a safety net for older or hook-injected lines.
+      if (isSystemReminderString(rec.content)) return entries
+      entries.push({ uuid: lineUuid, ts, type: 'user', text: rec.content })
     } else if (Array.isArray(rec.content)) {
+      let blockIdx = 0
       for (const blk of rec.content) {
         if (blk.type === 'tool_result') {
           const pending = pendingToolUses.get(blk.tool_use_id)
           if (pending) {
             entries.push({
-              uuid: randomUUID(),
-              ts: now,
+              uuid: entryUuid(blockIdx),
+              ts,
               type: 'tool-use',
               tool_name: pending.name,
               tool_input: pending.input,
@@ -261,14 +322,19 @@ function recordToEntries(
             pendingToolUses.delete(blk.tool_use_id)
           }
         } else if (blk.type === 'text') {
-          entries.push({ uuid: randomUUID(), ts: now, type: 'user', text: blk.text })
+          // Same safety net for array-shaped content: <system-reminder>-only
+          // text blocks are synthetic injections, not user input.
+          if (isSystemReminderString(blk.text)) { blockIdx++; continue }
+          entries.push({ uuid: entryUuid(blockIdx), ts, type: 'user', text: blk.text })
         }
+        blockIdx++
       }
     }
   } else if (rec.role === 'assistant' && Array.isArray(rec.content)) {
+    let blockIdx = 0
     for (const blk of rec.content) {
       if (blk.type === 'text') {
-        entries.push({ uuid: randomUUID(), ts: now, type: 'assistant-text', text: blk.text })
+        entries.push({ uuid: entryUuid(blockIdx), ts, type: 'assistant-text', text: blk.text })
       } else if (blk.type === 'tool_use') {
         if (blk.name === 'Agent' || blk.name === 'Task') {
           // Subagent spawn
@@ -286,8 +352,8 @@ function recordToEntries(
             ? loadAgentMeta(projectsRoot, cwdSlug, sessionId, agentId)
             : {}
           entries.push({
-            uuid: randomUUID(),
-            ts: now,
+            uuid: entryUuid(blockIdx),
+            ts,
             type: 'subagent-spawn',
             agent_id: agentId ?? undefined,
             agent_type: meta.agentType ?? (subagentType !== '' ? subagentType : undefined),
@@ -300,6 +366,7 @@ function recordToEntries(
           pendingToolUses.set(blk.id, { name: blk.name, input: blk.input })
         }
       }
+      blockIdx++
     }
   }
 
