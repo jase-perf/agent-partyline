@@ -13,6 +13,7 @@ import { join, dirname, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { PartyLineMonitor } from './monitor.js'
 import { startQuotaPoller, stopQuotaPoller, getQuota } from './quota.js'
+import { buildPermissionRequestFrame } from './serve-helpers.js'
 import type { Envelope } from '../src/types.js'
 import type { ServerWebSocket } from 'bun'
 import { openDb } from '../src/storage/db.js'
@@ -108,6 +109,13 @@ geminiObserver.on((u) => {
 })
 
 monitor.onMessage((envelope) => {
+  const permFrame = buildPermissionRequestFrame(envelope)
+  if (permFrame) {
+    const permJson = JSON.stringify(permFrame)
+    for (const ws of wsClients) ws.send(permJson)
+    return
+  }
+
   const json = JSON.stringify({ type: 'message', data: envelope })
   for (const ws of wsClients) {
     ws.send(json)
@@ -309,9 +317,10 @@ const server = Bun.serve({
     // REST API: machines
     if (url.pathname === '/api/machines') {
       const machines = db
-        .query<{ id: string; hostname: string; first_seen: string; last_seen: string }, []>(
-          'SELECT * FROM machines ORDER BY last_seen DESC',
-        )
+        .query<
+          { id: string; hostname: string; first_seen: string; last_seen: string },
+          []
+        >('SELECT * FROM machines ORDER BY last_seen DESC')
         .all()
       return Response.json(machines)
     }
