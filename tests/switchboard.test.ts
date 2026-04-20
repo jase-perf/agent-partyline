@@ -210,6 +210,121 @@ describe('switchboard', () => {
     cleanup()
   })
 
+  test('send permission-request envelope emits both envelope and permission-request observer frames', () => {
+    const a = registerSession(db, 'a', '/tmp')
+    const b = registerSession(db, 'b', '/tmp')
+    const sb = createSwitchboard(db)
+    const wsA = fakeWs('session')
+    const wsB = fakeWs('session')
+    const obs = fakeWs('observer')
+    sb.handleObserverOpen(obs as never)
+    sb.handleSessionHello(wsA, {
+      token: a.token,
+      name: 'a',
+      cc_session_uuid: null,
+      pid: 1,
+      machine_id: null,
+    })
+    sb.handleSessionHello(wsB, {
+      token: b.token,
+      name: 'b',
+      cc_session_uuid: null,
+      pid: 2,
+      machine_id: null,
+    })
+
+    obs.sent.length = 0
+
+    const permBody = JSON.stringify({
+      request_id: 'req-1',
+      tool_name: 'Bash',
+      description: 'run ls',
+      input_preview: 'ls -la',
+    })
+    sb.handleSessionFrame(wsA, {
+      type: 'send',
+      to: 'b',
+      frame_type: 'permission-request',
+      body: permBody,
+      client_ref: 'c1',
+    })
+
+    const frames = obs.sent.map(
+      (s: string) =>
+        JSON.parse(s) as {
+          type: string
+          envelope_type?: string
+          data?: { request_id?: string; tool_name?: string; from?: string; to?: string }
+        },
+    )
+    const envelopeFrame = frames.find(
+      (f) => f.type === 'envelope' && f.envelope_type === 'permission-request',
+    )
+    expect(envelopeFrame).toBeDefined()
+
+    const permFrame = frames.find((f) => f.type === 'permission-request')
+    expect(permFrame).toBeDefined()
+    expect(permFrame?.data?.request_id).toBe('req-1')
+    expect(permFrame?.data?.tool_name).toBe('Bash')
+    expect(permFrame?.data?.from).toBe('a')
+    expect(permFrame?.data?.to).toBe('b')
+    cleanup()
+  })
+
+  test('send permission-response envelope emits permission-resolved observer frame', () => {
+    const a = registerSession(db, 'a', '/tmp')
+    const b = registerSession(db, 'b', '/tmp')
+    const sb = createSwitchboard(db)
+    const wsA = fakeWs('session')
+    const wsB = fakeWs('session')
+    const obs = fakeWs('observer')
+    sb.handleObserverOpen(obs as never)
+    sb.handleSessionHello(wsA, {
+      token: a.token,
+      name: 'a',
+      cc_session_uuid: null,
+      pid: 1,
+      machine_id: null,
+    })
+    sb.handleSessionHello(wsB, {
+      token: b.token,
+      name: 'b',
+      cc_session_uuid: null,
+      pid: 2,
+      machine_id: null,
+    })
+
+    obs.sent.length = 0
+
+    const respBody = JSON.stringify({
+      request_id: 'req-1',
+      behavior: 'allow',
+    })
+    // b responds to a's request.
+    sb.handleSessionFrame(wsB, {
+      type: 'send',
+      to: 'a',
+      frame_type: 'permission-response',
+      body: respBody,
+      client_ref: 'c2',
+    })
+
+    const frames = obs.sent.map(
+      (s: string) =>
+        JSON.parse(s) as {
+          type: string
+          data?: { session?: string; request_id?: string; behavior?: string; resolved_by?: string }
+        },
+    )
+    const resolvedFrame = frames.find((f) => f.type === 'permission-resolved')
+    expect(resolvedFrame).toBeDefined()
+    expect(resolvedFrame?.data?.session).toBe('a')
+    expect(resolvedFrame?.data?.request_id).toBe('req-1')
+    expect(resolvedFrame?.data?.behavior).toBe('allow')
+    expect(resolvedFrame?.data?.resolved_by).toBe('b')
+    cleanup()
+  })
+
   test('uuid-rotate with mismatched old_uuid still archives current uuid', () => {
     const row = registerSession(db, 'foo', '/tmp')
     const sb = createSwitchboard(db)

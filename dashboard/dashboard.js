@@ -347,10 +347,26 @@ function connect() {
     } else if (data.type === 'overrides') {
       contextOverrides = data.data
       updateSessions(lastSessions)
+    } else if (data.type === 'session-update') {
+      handleSessionUpdate(data.data)
+      if (data.data && data.data.name) bumpUnread(data.data.name)
+      try {
+        notif.onSessionUpdate(data.data)
+      } catch (err) {
+        console.error('[notifications] onSessionUpdate threw', err)
+      }
+    } else if (data.type === 'jsonl') {
+      handleJsonlEvent(data.data)
+      var resolvedName = resolveNameFromJsonlPath(data.data.file_path)
+      bumpUnread(resolvedName || data.data.session_id)
+    } else if (data.type === 'hook-event') {
+      handleHookEvent(data.data)
+      maybeHandleCompactForCurrentView(data.data)
+    } else if (data.type === 'stream-reset') {
+      handleStreamReset(data.data)
     }
-    // Old frame types (sessions, session-update, jsonl, hook-event, stream-reset, cross-call)
-    // are no longer emitted by /ws/observer. Handlers kept as no-ops for any remaining
-    // bootstrap callers.
+    // Old frame types (sessions, cross-call) are no longer emitted by /ws/observer.
+    // Handlers kept as no-ops for any remaining bootstrap callers.
   }
 }
 

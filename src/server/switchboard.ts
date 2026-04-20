@@ -122,6 +122,42 @@ export function createSwitchboard(db: Database): Switchboard {
     }
 
     toObservers({ type: 'envelope', ...envelope })
+
+    if (envelope.envelope_type === 'permission-request') {
+      try {
+        const parsed = envelope.body ? JSON.parse(envelope.body) : {}
+        toObservers({
+          type: 'permission-request',
+          data: {
+            from: envelope.from,
+            to: envelope.to,
+            request_id: parsed.request_id,
+            tool_name: parsed.tool_name,
+            description: parsed.description,
+            input_preview: parsed.input_preview,
+          },
+        })
+      } catch {
+        /* malformed permission-request body; still routed as envelope */
+      }
+    }
+
+    if (envelope.envelope_type === 'permission-response') {
+      try {
+        const parsed = envelope.body ? JSON.parse(envelope.body) : {}
+        toObservers({
+          type: 'permission-resolved',
+          data: {
+            session: envelope.to,
+            request_id: parsed.request_id,
+            behavior: parsed.behavior,
+            resolved_by: envelope.from,
+          },
+        })
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   return {

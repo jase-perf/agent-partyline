@@ -244,6 +244,10 @@ const server = Bun.serve({
       })
     }
 
+    if (url.pathname === '/dashboard.css') {
+      return new Response(dashboardCss, { headers: { 'Content-Type': 'text/css' } })
+    }
+
     if (url.pathname === '/logout' && req.method === 'POST') {
       const c = parseCookieHeader(req.headers.get('cookie'))
       if (c) revokeCookie(db, c)
@@ -531,9 +535,6 @@ const server = Bun.serve({
     }
 
     // Static assets
-    if (url.pathname === '/dashboard.css') {
-      return new Response(dashboardCss, { headers: { 'Content-Type': 'text/css' } })
-    }
     if (url.pathname === '/dashboard.js') {
       return new Response(dashboardJs, { headers: { 'Content-Type': 'application/javascript' } })
     }
