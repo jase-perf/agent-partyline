@@ -347,3 +347,49 @@ describe('createNotifications — last assistant text', async () => {
     expect(fired[0]!.options.body).toBe('Claude is waiting')
   })
 })
+
+describe('createNotifications — trigger B (dashboard as recipient)', async () => {
+  function envelope(overrides = {}) {
+    return {
+      id: 'x',
+      seq: 0,
+      from: 'research',
+      to: 'dashboard',
+      type: 'message',
+      body: 'status update',
+      callback_id: null,
+      response_to: null,
+      ts: '2026-04-20T00:00:00Z',
+      ...overrides,
+    }
+  }
+
+  test("fires for the sender's session when message is addressed to dashboard", async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    notif.onPartyLineMessage(envelope())
+    expect(fired).toHaveLength(1)
+    expect(fired[0]!.options.body).toContain('dashboard')
+    expect(fired[0]!.options.body).toContain('status update')
+    expect(fired[0]!.options.tag).toBe('research')
+  })
+
+  test('does not fire on unrelated session when dashboard is the recipient', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('unrelated', true)
+    notif.onPartyLineMessage(envelope())
+    expect(fired).toHaveLength(0)
+  })
+
+  test("does not fire if the sender's session toggle is off", async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.onPartyLineMessage(envelope())
+    expect(fired).toHaveLength(0)
+  })
+})

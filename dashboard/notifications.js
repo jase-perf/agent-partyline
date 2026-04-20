@@ -136,12 +136,18 @@ export function createNotifications(deps) {
     onPartyLineMessage(envelope) {
       if (!envelope || envelope.type !== 'message') return
       for (const [sessionName] of settings) {
-        if (envelope.to !== sessionName && envelope.to !== 'all') continue
-        if (envelope.from === sessionName) continue
+        const isDirectedHere = envelope.to === sessionName || envelope.to === 'all'
+        // Messages addressed to "dashboard" aren't a real delivery target — the dashboard
+        // only observes. Surface them as a notification on the sender's session so the
+        // user can see (and the conversation isn't silently dropped).
+        const isMyOutboundToDashboard = envelope.to === 'dashboard' && envelope.from === sessionName
+        if (!isDirectedHere && !isMyOutboundToDashboard) continue
+        if (isDirectedHere && envelope.from === sessionName) continue
         if (!shouldFire(sessionName)) continue
         const bodyText = String(envelope.body || '')
         const preview = bodyText.length > 120 ? bodyText.slice(0, 120) + '…' : bodyText
-        fire(sessionName, sessionName, (envelope.from || '?') + ': ' + preview)
+        const prefix = isMyOutboundToDashboard ? 'to dashboard: ' : (envelope.from || '?') + ': '
+        fire(sessionName, sessionName, prefix + preview)
       }
     },
     onPermissionRequest(frame) {
