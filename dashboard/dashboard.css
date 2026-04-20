@@ -932,3 +932,18 @@ details.spawn-marker summary::-webkit-details-marker { display: none; }
 }
 .view-agent:hover { background: rgba(88, 166, 255, 0.1); }
 details.spawn-marker { cursor: default; }
+
+/* Switchboard — bounded-height flex column so the card grid scrolls
+   independently of the page (same pattern as session-detail). */
+section[data-view="switchboard"].view {
+  flex-direction: column;
+  padding: 0;
+}
+section[data-view="switchboard"] .switchboard-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
