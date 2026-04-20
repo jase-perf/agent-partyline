@@ -210,3 +210,59 @@ describe('createNotifications — trigger C (permission-request)', async () => {
     expect(fired).toHaveLength(0)
   })
 })
+
+describe('createNotifications — fire conditions', async () => {
+  test('does not fire if tab visible AND route is current session', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = false
+    ctx.getCurrentRoute = () => '/session/research'
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'working' })
+    await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'idle' })
+    expect(fired).toHaveLength(0)
+  })
+
+  test('fires if tab visible but viewing different session', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = false
+    ctx.getCurrentRoute = () => '/session/other'
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'working' })
+    await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'idle' })
+    expect(fired).toHaveLength(1)
+  })
+
+  test('does not fire if toggle off for that session', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    // no setEnabled call
+    await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'working' })
+    await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'idle' })
+    expect(fired).toHaveLength(0)
+  })
+
+  test('does not fire if Notification.permission !== granted', async () => {
+    const { ctx, fired, FakeNotification } = mockDeps()
+    FakeNotification.permission = 'denied'
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'working' })
+    await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'idle' })
+    expect(fired).toHaveLength(0)
+  })
+
+  test('fires on Switchboard (not on any session detail)', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = false
+    ctx.getCurrentRoute = () => '/switchboard'
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'working' })
+    await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'idle' })
+    expect(fired).toHaveLength(1)
+  })
+})
