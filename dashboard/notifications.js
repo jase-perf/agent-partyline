@@ -1,15 +1,16 @@
 // @ts-check
 /**
  * Browser notification module for Party Line dashboard.
- * Factory pattern: dependencies injected via createNotifications(deps) so
- * the module is unit-testable without a DOM.
+ * SW-based: notifications are dispatched via the page's active Service Worker
+ * registration, which is the only primitive that works on Chrome Android.
  */
 
 const STORAGE_KEY = 'partyLineNotifications'
 
 /**
  * @typedef {Object} NotificationDeps
- * @property {typeof Notification | undefined} NotificationCtor
+ * @property {Promise<ServiceWorkerRegistration|null>|null} swRegistration
+ * @property {{ permission: NotificationPermission; requestPermission: () => Promise<NotificationPermission> } | undefined} NotificationPermission
  * @property {Storage} localStorage
  * @property {Document} doc
  * @property {Window} win
@@ -46,35 +47,47 @@ export function createNotifications(deps) {
   }
 
   const settings = loadSettings(deps.localStorage)
-  const activeNotifications = new Map()
   const lastAssistantText = new Map()
   const lastKnownState = new Map()
   const resolvedPermissions = new Set()
 
+  function permissionState() {
+    if (!deps.NotificationPermission) return 'unsupported'
+    return deps.NotificationPermission.permission
+  }
+
   function shouldFire(sessionName) {
     if (!settings.get(sessionName)) return false
-    if (!deps.NotificationCtor) return false
-    if (deps.NotificationCtor.permission !== 'granted') return false
+    if (permissionState() !== 'granted') return false
     if (deps.doc.hidden) return true
     const route = deps.getCurrentRoute()
     return route !== '/session/' + sessionName
   }
 
-  function fire(sessionName, title, body) {
-    const NC = deps.NotificationCtor
-    if (!NC) return
-    const n = new NC(title, {
-      body,
-      tag: sessionName,
-      data: { sessionName },
-    })
-    activeNotifications.set(sessionName, n)
-    n.onclick = () => {
-      try {
-        deps.win.focus()
-      } catch {}
-      deps.navigate('/#/session/' + sessionName)
-      n.close()
+  async function fire(sessionName, title, body) {
+    if (!deps.swRegistration) return
+    const reg = await deps.swRegistration
+    if (!reg) return
+    try {
+      await reg.showNotification(title, {
+        body,
+        tag: sessionName,
+        data: { sessionName },
+      })
+    } catch (err) {
+      console.error('[notifications] showNotification threw', err)
+    }
+  }
+
+  async function dismissByTag(sessionName) {
+    if (!deps.swRegistration) return
+    const reg = await deps.swRegistration
+    if (!reg) return
+    try {
+      const ns = await reg.getNotifications({ tag: sessionName })
+      for (const n of ns) n.close()
+    } catch (err) {
+      console.error('[notifications] dismissByTag threw', err)
     }
   }
 
@@ -88,12 +101,13 @@ export function createNotifications(deps) {
       persistSettings()
     },
     getPermissionState() {
-      if (!deps.NotificationCtor) return 'unsupported'
-      return deps.NotificationCtor.permission
+      return permissionState()
     },
-    async requestPermission() {
-      if (!deps.NotificationCtor) return 'unsupported'
-      return await deps.NotificationCtor.requestPermission()
+    // IMPORTANT: callers MUST invoke this synchronously from inside a user
+    // gesture handler. Do not await anything before calling.
+    requestPermission() {
+      if (!deps.NotificationPermission) return Promise.resolve('unsupported')
+      return deps.NotificationPermission.requestPermission()
     },
     async onSessionUpdate(update) {
       if (!update || !update.name) return
@@ -130,16 +144,13 @@ export function createNotifications(deps) {
         } catch {
           // fall back to generic body
         }
-        fire(update.name, update.name, body)
+        await fire(update.name, update.name, body)
       }
     },
-    onPartyLineMessage(envelope) {
+    async onPartyLineMessage(envelope) {
       if (!envelope || envelope.type !== 'message') return
       for (const [sessionName] of settings) {
         const isDirectedHere = envelope.to === sessionName || envelope.to === 'all'
-        // Messages addressed to "dashboard" aren't a real delivery target — the dashboard
-        // only observes. Surface them as a notification on the sender's session so the
-        // user can see (and the conversation isn't silently dropped).
         const isMyOutboundToDashboard = envelope.to === 'dashboard' && envelope.from === sessionName
         if (!isDirectedHere && !isMyOutboundToDashboard) continue
         if (isDirectedHere && envelope.from === sessionName) continue
@@ -147,34 +158,26 @@ export function createNotifications(deps) {
         const bodyText = String(envelope.body || '')
         const preview = bodyText.length > 120 ? bodyText.slice(0, 120) + '…' : bodyText
         const prefix = isMyOutboundToDashboard ? 'to dashboard: ' : (envelope.from || '?') + ': '
-        fire(sessionName, sessionName, prefix + preview)
+        await fire(sessionName, sessionName, prefix + preview)
       }
     },
-    onPermissionRequest(frame) {
+    async onPermissionRequest(frame) {
       if (!frame || !frame.session || !frame.request_id) return
       if (resolvedPermissions.has(frame.request_id)) return
       if (!shouldFire(frame.session)) return
       const title = 'Permission needed: ' + (frame.tool_name || '?')
       const descr = String(frame.description || '')
       const body = descr.length > 120 ? descr.slice(0, 120) + '…' : descr
-      fire(frame.session, title, body)
+      await fire(frame.session, title, body)
     },
-    onPermissionResolved(frame) {
+    async onPermissionResolved(frame) {
       if (!frame || !frame.request_id) return
       resolvedPermissions.add(frame.request_id)
-      const active = activeNotifications.get(frame.session)
-      if (active) {
-        active.close()
-        activeNotifications.delete(frame.session)
-      }
+      await dismissByTag(frame.session)
     },
-    onNotificationDismiss(frame) {
+    async onNotificationDismiss(frame) {
       if (!frame || !frame.session) return
-      const active = activeNotifications.get(frame.session)
-      if (active) {
-        active.close()
-        activeNotifications.delete(frame.session)
-      }
+      await dismissByTag(frame.session)
     },
     dispatchSessionViewed(sessionName) {
       if (!sessionName) return
