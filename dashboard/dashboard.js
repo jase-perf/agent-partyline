@@ -789,21 +789,39 @@ function handleJsonlEvent(update) {
 // full /api/transcript fetch. Used for instant self-loopback feedback.
 function appendEnvelopeToStream(envelope) {
   if (!envelope || !selectedSessionId) return;
+  // Skip protocol-level chatter — users never want to see these in a session view.
+  if (envelope.type === 'heartbeat' || envelope.type === 'announce') return;
   const root = document.getElementById('detail-stream');
   if (!root) return;
   const key = envelope.id;
   if (renderedEntryKeys.has(key)) return;
   const isSent = envelope.from === selectedSessionId;
-  const entry = {
-    uuid: envelope.id,
-    ts: envelope.ts,
-    type: isSent ? 'party-line-send' : 'party-line-receive',
-    envelope_id: envelope.id,
-    other_session: isSent ? envelope.to : envelope.from,
-    body: envelope.body,
-    callback_id: envelope.callback_id || undefined,
-    envelope_type: envelope.type,
-  };
+  // When the user sends a message from the dashboard's session-detail send box,
+  // the envelope comes back as from="dashboard" → viewed session. Render it as
+  // a "you:" user entry so it matches how it'll look after a refresh (the
+  // recipient's JSONL records the incoming channel message as a user turn).
+  const fromDashboardToSelf =
+    envelope.from === 'dashboard' && envelope.to === selectedSessionId;
+  let entry;
+  if (fromDashboardToSelf) {
+    entry = {
+      uuid: envelope.id,
+      ts: envelope.ts,
+      type: 'user',
+      text: envelope.body,
+    };
+  } else {
+    entry = {
+      uuid: envelope.id,
+      ts: envelope.ts,
+      type: isSent ? 'party-line-send' : 'party-line-receive',
+      envelope_id: envelope.id,
+      other_session: isSent ? envelope.to : envelope.from,
+      body: envelope.body,
+      callback_id: envelope.callback_id || undefined,
+      envelope_type: envelope.type,
+    };
+  }
   const wasNear = isNearBottom(root);
   renderedEntryKeys.add(key);
   root.appendChild(renderEntry(entry));
