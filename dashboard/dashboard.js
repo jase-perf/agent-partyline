@@ -1052,10 +1052,40 @@ function buildAgentLi(sa) {
 // only append new entries instead of wiping the DOM (avoids flash + scroll jump).
 let renderedEntryKeys = new Set();
 let renderedStreamKey = null;  // sessionId + '|' + (agentId || '') — resets on switch
+let missedWhileScrolledUp = 0;  // count of entries appended while user was scrolled up
 
 function isNearBottom(el) {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 }
+
+function updateScrollToBottomButton(newlyMissed) {
+  const btn = document.getElementById('scroll-to-bottom');
+  const stream = document.getElementById('detail-stream');
+  if (!btn || !stream) return;
+  const near = isNearBottom(stream);
+  if (near) {
+    missedWhileScrolledUp = 0;
+    btn.hidden = true;
+    return;
+  }
+  if (newlyMissed) missedWhileScrolledUp += newlyMissed;
+  btn.hidden = false;
+  btn.textContent = missedWhileScrolledUp > 0
+    ? '↓ ' + missedWhileScrolledUp + ' new'
+    : '↓ Latest';
+}
+
+(function wireScrollToBottom() {
+  const btn = document.getElementById('scroll-to-bottom');
+  const stream = document.getElementById('detail-stream');
+  if (!btn || !stream) return;
+  btn.addEventListener('click', () => {
+    stream.scrollTop = stream.scrollHeight;
+    missedWhileScrolledUp = 0;
+    btn.hidden = true;
+  });
+  stream.addEventListener('scroll', () => updateScrollToBottomButton(0));
+})();
 
 async function renderStream(opts) {
   const root = document.getElementById('detail-stream');
@@ -1116,22 +1146,28 @@ async function renderStream(opts) {
   }
 
   // Append only missing entries (keyed by uuid, falling back to ts+type).
-  let appendedAny = false;
+  let appendedCount = 0;
   for (const e of entries) {
     const key = e.uuid || (e.ts + '|' + e.type + '|' + (e.envelope_id || ''));
     if (renderedEntryKeys.has(key)) continue;
     renderedEntryKeys.add(key);
     root.appendChild(renderEntry(e));
-    appendedAny = true;
+    appendedCount++;
   }
 
   // Scroll to bottom only if it's a fresh stream OR the user was already near
   // the bottom when the update arrived. Otherwise preserve their position.
   if (isNewStream || force) {
     root.scrollTop = root.scrollHeight;
-  } else if (appendedAny && wasNearBottom) {
+    missedWhileScrolledUp = 0;
+  } else if (appendedCount > 0 && wasNearBottom) {
     root.scrollTop = root.scrollHeight;
+  } else if (appendedCount > 0 && !wasNearBottom) {
+    // User is scrolled up and new content arrived — show the jump button.
+    updateScrollToBottomButton(appendedCount);
   }
+  // Also refresh button visibility based on current position.
+  updateScrollToBottomButton(0);
 }
 
 function renderEntry(e) {
