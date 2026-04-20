@@ -87,3 +87,10 @@ export function buildPermissionResponseEnvelope(args: {
     JSON.stringify({ request_id: args.request_id, behavior: args.behavior }),
   )
 }
+
+export function buildDismissFrame(session: string): {
+  type: 'notification-dismiss'
+  data: { session: string }
+} {
+  return { type: 'notification-dismiss', data: { session } }
+}

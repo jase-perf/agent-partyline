@@ -17,6 +17,7 @@ import {
   buildPermissionRequestFrame,
   validatePermissionResponseBody,
   buildPermissionResponseEnvelope,
+  buildDismissFrame,
 } from './serve-helpers.js'
 import type { Envelope } from '../src/types.js'
 import type { ServerWebSocket } from 'bun'
@@ -407,10 +408,16 @@ const server = Bun.serve({
       try {
         const parsed = JSON.parse(String(data)) as {
           action?: string
+          type?: string
           to?: string
           message?: string
-          type?: string
           callback_id?: string
+          session?: string
+        }
+        if (parsed.type === 'session-viewed' && typeof parsed.session === 'string') {
+          const dismissJson = JSON.stringify(buildDismissFrame(parsed.session))
+          for (const client of wsClients) client.send(dismissJson)
+          return
         }
         if (parsed.action === 'send' && parsed.to && parsed.message) {
           void monitor.send(parsed.to, parsed.message, (parsed.type as 'message') ?? 'message')

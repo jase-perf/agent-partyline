@@ -4,6 +4,7 @@ import {
   buildPermissionRequestFrame,
   validatePermissionResponseBody,
   buildPermissionResponseEnvelope,
+  buildDismissFrame,
 } from '../dashboard/serve-helpers.js'
 
 describe('buildPermissionRequestFrame', async () => {
@@ -95,5 +96,15 @@ describe('buildPermissionResponseEnvelope', async () => {
     expect(env.from).toBe('dashboard')
     expect(env.to).toBe('research')
     expect(JSON.parse(env.body)).toEqual({ request_id: 'abc12', behavior: 'allow' })
+  })
+})
+
+describe('buildDismissFrame', async () => {
+  test('formats a notification-dismiss frame', async () => {
+    const frame = buildDismissFrame('research')
+    expect(frame).toEqual({
+      type: 'notification-dismiss',
+      data: { session: 'research' },
+    })
   })
 })
