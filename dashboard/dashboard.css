@@ -1699,3 +1699,24 @@ section[data-view='switchboard'] .switchboard-wrap {
   opacity: 0.2 !important;
   cursor: not-allowed;
 }
+
+/* Notification bell in Session Detail header */
+.notif-bell-detail {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+  opacity: 0.7;
+  color: inherit;
+}
+.notif-bell-detail:hover:not(:disabled) {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+.notif-bell-detail:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}

@@ -1136,6 +1136,7 @@ async function loadSessionDetailView() {
   const sessionKey = selectedSessionId
 
   document.getElementById('detail-name').textContent = sessionKey
+  updateDetailBell(sessionKey)
 
   try {
     const r = await fetch('/api/session?id=' + encodeURIComponent(sessionKey))
@@ -1184,6 +1185,23 @@ function renderDetailHeader(session) {
   } else {
     hostEl.textContent = ''
   }
+
+  updateDetailBell(session.name || selectedSessionId)
+}
+
+function updateDetailBell(sessionName) {
+  const bell = document.getElementById('detail-bell')
+  if (!bell || !sessionName) return
+  const permDenied = notif.getPermissionState() !== 'granted'
+  const on = notif.isEnabled(sessionName)
+  bell.hidden = false
+  bell.classList.toggle('notif-bell-on', on)
+  bell.classList.toggle('notif-bell-off', !on)
+  bell.classList.toggle('notif-bell-disabled', permDenied)
+  bell.textContent = on ? '🔔' : '🔕'
+  bell.setAttribute('aria-label', 'Notifications for ' + sessionName + ': ' + (on ? 'on' : 'off'))
+  bell.setAttribute('data-session', sessionName)
+  bell.disabled = permDenied
 }
 
 function renderAgentTree() {
@@ -2013,6 +2031,38 @@ document.getElementById('overview-grid')?.addEventListener('click', (ev) => {
   bell.classList.toggle('notif-bell-off', !next)
   bell.textContent = next ? '🔔' : '🔕'
   bell.setAttribute('aria-label', `Notifications for ${session}: ${next ? 'on' : 'off'}`)
+  // Sync the Session Detail header bell if it's for the same session.
+  const detailBell = document.getElementById('detail-bell')
+  if (detailBell && detailBell.getAttribute('data-session') === session) {
+    detailBell.classList.toggle('notif-bell-on', next)
+    detailBell.classList.toggle('notif-bell-off', !next)
+    detailBell.textContent = next ? '🔔' : '🔕'
+    detailBell.setAttribute(
+      'aria-label',
+      'Notifications for ' + session + ': ' + (next ? 'on' : 'off'),
+    )
+  }
+})
+
+// Session Detail header bell toggle.
+document.getElementById('detail-bell')?.addEventListener('click', (ev) => {
+  const bell = ev.currentTarget
+  if (!(bell instanceof HTMLElement)) return
+  const session = bell.getAttribute('data-session')
+  if (!session || bell.classList.contains('notif-bell-disabled')) return
+  const next = !notif.isEnabled(session)
+  notif.setEnabled(session, next)
+  bell.classList.toggle('notif-bell-on', next)
+  bell.classList.toggle('notif-bell-off', !next)
+  bell.textContent = next ? '🔔' : '🔕'
+  bell.setAttribute('aria-label', 'Notifications for ' + session + ': ' + (next ? 'on' : 'off'))
+  // Also update the Switchboard card bell for this session if it is in the DOM.
+  const cardBell = document.querySelector(`.notif-bell[data-session="${CSS.escape(session)}"]`)
+  if (cardBell) {
+    cardBell.classList.toggle('notif-bell-on', next)
+    cardBell.classList.toggle('notif-bell-off', !next)
+    cardBell.textContent = next ? '🔔' : '🔕'
+  }
 })
 
 connect()
