@@ -11,6 +11,12 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/dashboard.css" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#0d1117" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Party Line" />
   </head>
   <body>
     <div id="notif-banner" class="notif-banner" hidden>
@@ -43,6 +49,7 @@
           <span class="quota-pct" id="quota7dPct">—</span>
         </span>
       </div>
+      <button id="pwa-install-btn" class="pwa-install-btn" hidden>Install</button>
       <span class="conn-status" id="connStatus">connecting...</span>
     </header>
 
