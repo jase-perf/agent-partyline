@@ -266,3 +266,22 @@ describe('createNotifications — fire conditions', async () => {
     expect(fired).toHaveLength(1)
   })
 })
+
+describe('createNotifications — click handler', async () => {
+  test('click navigates to session route, focuses window, closes notification', async () => {
+    const { ctx, instances, win } = mockDeps()
+    ctx.doc.hidden = true
+    const navigateMock = ctx.navigate
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'working' })
+    await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'idle' })
+
+    expect(instances).toHaveLength(1)
+    const n = instances[0]
+    n.onclick?.(new Event('click'))
+
+    expect(win.focus).toHaveBeenCalled()
+    expect(navigateMock).toHaveBeenCalledWith('/#/session/research')
+  })
+})

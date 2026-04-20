@@ -29,6 +29,7 @@ export function mockDeps(overrides: Record<string, unknown> = {}) {
   }
   const fired: Array<{ title: string; options: NotificationOptions }> = []
   const closed: string[] = []
+  const instances: FakeNotification[] = []
   class FakeNotification {
     static permission: 'default' | 'granted' | 'denied' = 'granted'
     static requestPermission = mock(async () => FakeNotification.permission)
@@ -41,6 +42,7 @@ export function mockDeps(overrides: Record<string, unknown> = {}) {
       this.tag = options.tag
       this.data = options.data
       fired.push({ title, options })
+      instances.push(this)
     }
     close() {
       if (this.tag) closed.push(this.tag)
@@ -63,5 +65,5 @@ export function mockDeps(overrides: Record<string, unknown> = {}) {
     navigate: mock((_route: string) => {}),
     ...overrides,
   }
-  return { ctx, fired, closed, wsSends, FakeNotification, doc, win }
+  return { ctx, fired, closed, wsSends, FakeNotification, doc, win, instances }
 }
