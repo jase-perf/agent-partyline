@@ -13,6 +13,7 @@ import { join, resolve } from 'path'
 /** Structured status extracted from a session's JSONL. */
 export interface SessionStatus {
   state: 'idle' | 'working' | 'unknown'
+  sessionId: string | null // CC session UUID, required for client UUID→name mapping
   lastActivity: string // ISO timestamp of last entry
   lastText: string // last assistant text (truncated)
   currentTool: string | null // tool currently being executed, if any
@@ -258,9 +259,7 @@ export function getSessionStatus(): SessionStatus | null {
   // content (no tool_use) means the turn is complete — the session is idle.
   // turn_duration entries are not always written (especially for short turns),
   // so we can't rely on them for idle detection.
-  const metadataTypes = new Set([
-    'custom-title', 'permission-mode', 'file-history-snapshot',
-  ])
+  const metadataTypes = new Set(['custom-title', 'permission-mode', 'file-history-snapshot'])
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i]!
     if (metadataTypes.has(entry.type ?? '')) continue
@@ -271,7 +270,12 @@ export function getSessionStatus(): SessionStatus | null {
       // the session is actively waiting for a tool result
       const content = entry.message?.content
       const lastBlock = Array.isArray(content) ? content[content.length - 1] : null
-      if (lastBlock && typeof lastBlock === 'object' && 'type' in lastBlock && lastBlock.type === 'tool_use') {
+      if (
+        lastBlock &&
+        typeof lastBlock === 'object' &&
+        'type' in lastBlock &&
+        lastBlock.type === 'tool_use'
+      ) {
         state = 'working'
       } else {
         // Text or thinking content — turn is complete, session is idle
@@ -285,7 +289,7 @@ export function getSessionStatus(): SessionStatus | null {
       // or the session hasn't started processing yet. Check if this
       // is recent (within last 60s) to distinguish.
       const ts = entry.timestamp ? new Date(entry.timestamp).getTime() : 0
-      state = (Date.now() - ts < 60_000) ? 'working' : 'idle'
+      state = Date.now() - ts < 60_000 ? 'working' : 'idle'
     } else {
       state = 'idle'
     }
@@ -318,6 +322,7 @@ export function getSessionStatus(): SessionStatus | null {
 
   return {
     state,
+    sessionId: cachedSessionId,
     lastActivity,
     lastText: lastAssistantText,
     currentTool,
