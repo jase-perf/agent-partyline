@@ -1,12 +1,9 @@
 /**
- * protocol.ts — Message creation, serialization, and deduplication.
+ * protocol.ts — Message creation and serialization.
  */
 
 import { randomBytes } from 'crypto'
 import type { Envelope, MessageType } from './types.js'
-import { DEDUP_WINDOW_MS } from './types.js'
-
-let sequenceCounter = 0
 
 /** Generate a unique message ID. */
 export function generateId(): string {
@@ -34,7 +31,6 @@ export function createEnvelope(
 ): Envelope {
   return {
     id: generateId(),
-    seq: sequenceCounter++,
     from,
     to,
     type,
@@ -67,28 +63,5 @@ export function deserialize(data: Buffer): Envelope | null {
     return parsed as unknown as Envelope
   } catch {
     return null
-  }
-}
-
-/**
- * Deduplication tracker. Keeps a set of recently seen message IDs
- * and prunes them periodically.
- */
-export class Deduplicator {
-  private seen = new Map<string, number>() // id → timestamp
-
-  /** Returns true if this message has already been seen. */
-  isDuplicate(id: string): boolean {
-    if (this.seen.has(id)) return true
-    this.seen.set(id, Date.now())
-    return false
-  }
-
-  /** Remove entries older than the dedup window. */
-  prune(): void {
-    const cutoff = Date.now() - DEDUP_WINDOW_MS
-    for (const [id, ts] of this.seen) {
-      if (ts < cutoff) this.seen.delete(id)
-    }
   }
 }

@@ -8,7 +8,7 @@
 import { createSocket, type Socket } from 'node:dgram'
 import type { Envelope, TransportConfig } from '../types.js'
 import { DEFAULT_TRANSPORT_CONFIG } from '../types.js'
-import { serialize, deserialize, Deduplicator } from '../protocol.js'
+import { serialize, deserialize } from '../protocol.js'
 
 export type MessageHandler = (envelope: Envelope) => void
 
@@ -17,9 +17,8 @@ export class UdpMulticastTransport {
   private config: TransportConfig
   private sessionName: string
   private includeSelf: boolean
-  private dedup = new Deduplicator()
+  private seenIds = new Set<string>()
   private onMessage: MessageHandler | null = null
-  private pruneTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(sessionName: string, config: Partial<TransportConfig> = {}, includeSelf = false) {
     this.sessionName = sessionName
@@ -45,7 +44,8 @@ export class UdpMulticastTransport {
         if (!envelope) return
 
         // Deduplicate (send-twice means we'll see each message twice)
-        if (this.dedup.isDuplicate(envelope.id)) return
+        if (this.seenIds.has(envelope.id)) return
+        this.seenIds.add(envelope.id)
 
         // Don't deliver our own messages back to ourselves (unless includeSelf)
         if (!this.includeSelf && envelope.from === this.sessionName) return
@@ -57,9 +57,6 @@ export class UdpMulticastTransport {
         socket.addMembership(this.config.multicastAddress)
         socket.setMulticastTTL(this.config.ttl)
         socket.setMulticastLoopback(this.config.loopback)
-
-        // Prune dedup set periodically
-        this.pruneTimer = setInterval(() => this.dedup.prune(), 30_000)
 
         resolve()
       })
@@ -91,7 +88,6 @@ export class UdpMulticastTransport {
 
   /** Stop listening and leave the multicast group. */
   stop(): void {
-    if (this.pruneTimer) clearInterval(this.pruneTimer)
     if (this.socket) {
       try {
         this.socket.dropMembership(this.config.multicastAddress)

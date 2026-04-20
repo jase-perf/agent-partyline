@@ -12,7 +12,6 @@ export type MessageType =
 /** The wire format for all party line messages. */
 export interface Envelope {
   id: string
-  seq: number
   from: string
   to: string // session name, or "all" for broadcast
   type: MessageType
@@ -69,4 +68,3 @@ export const DEFAULT_TRANSPORT_CONFIG: TransportConfig = {
 
 export const HEARTBEAT_INTERVAL_MS = 30_000
 export const SESSION_TIMEOUT_MS = 75_000 // ~2.5 heartbeat intervals
-export const DEDUP_WINDOW_MS = 60_000

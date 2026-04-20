@@ -86,7 +86,6 @@ describe('createNotifications — trigger B (party-line message)', async () => {
   function envelope(overrides = {}) {
     return {
       id: 'x',
-      seq: 0,
       from: 'discord',
       to: 'research',
       type: 'message',
@@ -285,7 +284,6 @@ describe('createNotifications — trigger B (dashboard as recipient)', async () 
   function envelope(overrides = {}) {
     return {
       id: 'x',
-      seq: 0,
       from: 'research',
       to: 'dashboard',
       type: 'message',
