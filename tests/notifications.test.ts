@@ -166,3 +166,47 @@ describe('createNotifications — trigger B (party-line message)', async () => {
     expect(fired[0].options.body.length).toBeLessThanOrEqual(140) // "from: " + 120 + ellipsis
   })
 })
+
+describe('createNotifications — trigger C (permission-request)', async () => {
+  function permFrame(overrides = {}) {
+    return {
+      session: 'research',
+      request_id: 'abc12',
+      tool_name: 'Bash',
+      description: 'Run tests',
+      input_preview: '{"cmd":"ls"}',
+      ...overrides,
+    }
+  }
+
+  test('fires with "Permission needed" title when toggle on', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    notif.onPermissionRequest(permFrame())
+    expect(fired).toHaveLength(1)
+    expect(fired[0].title).toContain('Permission needed')
+    expect(fired[0].title).toContain('Bash')
+    expect(fired[0].options.body).toContain('Run tests')
+    expect(fired[0].options.tag).toBe('research')
+  })
+
+  test('does not fire when session toggle is off', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.onPermissionRequest(permFrame())
+    expect(fired).toHaveLength(0)
+  })
+
+  test('does not fire if request_id already resolved', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    notif.onPermissionResolved({ session: 'research', request_id: 'abc12', behavior: 'allow' })
+    notif.onPermissionRequest(permFrame())
+    expect(fired).toHaveLength(0)
+  })
+})

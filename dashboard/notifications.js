@@ -114,5 +114,23 @@ export function createNotifications(deps) {
         fire(sessionName, sessionName, (envelope.from || '?') + ': ' + preview)
       }
     },
+    onPermissionRequest(frame) {
+      if (!frame || !frame.session || !frame.request_id) return
+      if (resolvedPermissions.has(frame.request_id)) return
+      if (!shouldFire(frame.session)) return
+      const title = 'Permission needed: ' + (frame.tool_name || '?')
+      const descr = String(frame.description || '')
+      const body = descr.length > 120 ? descr.slice(0, 120) + '…' : descr
+      fire(frame.session, title, body)
+    },
+    onPermissionResolved(frame) {
+      if (!frame || !frame.request_id) return
+      resolvedPermissions.add(frame.request_id)
+      const active = activeNotifications.get(frame.session)
+      if (active) {
+        active.close()
+        activeNotifications.delete(frame.session)
+      }
+    },
   }
 }
