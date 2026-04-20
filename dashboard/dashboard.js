@@ -264,7 +264,11 @@ function connect() {
       addMessage(data.data)
       addMessageToBus(data.data)
       if (data.data.to && data.data.to !== 'all') bumpUnread(data.data.to)
-      notif.onPartyLineMessage(data.data)
+      try {
+        notif.onPartyLineMessage(data.data)
+      } catch (err) {
+        console.error('[notifications] onPartyLineMessage threw', err)
+      }
       // Live-append to the session-detail stream without re-fetching the
       // full transcript (instant feedback for sent + received messages).
       if (
@@ -281,7 +285,11 @@ function connect() {
     } else if (data.type === 'session-update') {
       handleSessionUpdate(data.data)
       bumpUnread(data.data.name)
-      notif.onSessionUpdate(data.data)
+      try {
+        notif.onSessionUpdate(data.data)
+      } catch (err) {
+        console.error('[notifications] onSessionUpdate threw', err)
+      }
     } else if (data.type === 'jsonl') {
       handleJsonlEvent(data.data)
       bumpUnread(resolveNameFromJsonlPath(data.data.file_path) || data.data.session_id)
@@ -293,13 +301,25 @@ function connect() {
     } else if (data.type === 'stream-reset') handleStreamReset(data.data)
     else if (data.type === 'cross-call') handleCrossCall(data.data)
     else if (data.type === 'permission-request') {
-      notif.onPermissionRequest(data.data)
+      try {
+        notif.onPermissionRequest(data.data)
+      } catch (err) {
+        console.error('[notifications] onPermissionRequest threw', err)
+      }
       renderPermissionCard(data.data)
     } else if (data.type === 'permission-resolved') {
-      notif.onPermissionResolved(data.data)
+      try {
+        notif.onPermissionResolved(data.data)
+      } catch (err) {
+        console.error('[notifications] onPermissionResolved threw', err)
+      }
       updatePermissionCardResolved(data.data)
     } else if (data.type === 'notification-dismiss') {
-      notif.onNotificationDismiss(data.data)
+      try {
+        notif.onNotificationDismiss(data.data)
+      } catch (err) {
+        console.error('[notifications] onNotificationDismiss threw', err)
+      }
     }
   }
 }
