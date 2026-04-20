@@ -21,13 +21,6 @@ export interface Envelope {
   ts: string // ISO 8601
 }
 
-/** A known session on the party line (tracked via heartbeats). */
-export interface KnownSession {
-  name: string
-  lastSeen: number // Date.now() timestamp
-  metadata?: SessionMetadata
-}
-
 /** Optional metadata a session can announce about itself. */
 export interface SessionMetadata {
   description?: string
@@ -48,23 +41,3 @@ export interface SessionMetadata {
     outputTokens: number | null
   }
 }
-
-/** Configuration for the UDP multicast transport. */
-export interface TransportConfig {
-  multicastAddress: string
-  port: number
-  ttl: number
-  loopback: boolean
-  sendTwiceDelayMs: number
-}
-
-export const DEFAULT_TRANSPORT_CONFIG: TransportConfig = {
-  multicastAddress: '239.77.76.10',
-  port: 47100,
-  ttl: 1, // same-subnet only (TTL 0 is ideal but Bun's setsockopt rejects it)
-  loopback: true,
-  sendTwiceDelayMs: 50,
-}
-
-export const HEARTBEAT_INTERVAL_MS = 30_000
-export const SESSION_TIMEOUT_MS = 75_000 // ~2.5 heartbeat intervals

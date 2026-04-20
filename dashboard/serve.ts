@@ -1,8 +1,8 @@
 /**
  * serve.ts — Web dashboard + WebSocket bridge for the party line.
  *
- * Runs a Bun HTTP server that serves the dashboard UI and bridges
- * multicast traffic to connected browsers via WebSocket.
+ * Runs a Bun HTTP server that serves the dashboard UI and bridges the
+ * switchboard's WebSocket routing to connected browsers via /ws/observer.
  *
  * Usage:
  *   bun dashboard/serve.ts [--port 3400] [--name dashboard]
@@ -16,17 +16,8 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join, dirname, resolve } from 'path'
 import { fileURLToPath } from 'url'
-import { randomBytes } from 'node:crypto'
-import { PartyLineMonitor } from './monitor.js'
 import { startQuotaPoller, stopQuotaPoller, getQuota } from './quota.js'
-import {
-  buildPermissionRequestFrame,
-  validatePermissionResponseBody,
-  buildPermissionResponseEnvelope,
-  buildDismissFrame,
-} from './serve-helpers.js'
-import type { Envelope } from '../src/types.js'
-import type { ServerWebSocket } from 'bun'
+import { validatePermissionResponseBody, buildPermissionResponseEnvelope } from './serve-helpers.js'
 import { openDb } from '../src/storage/db.js'
 import { Aggregator } from '../src/aggregator.js'
 import { handleIngest } from '../src/ingest/http.js'
@@ -35,6 +26,7 @@ import { getMachineId } from '../src/machine-id.js'
 import { JsonlObserver } from '../src/observers/jsonl.js'
 import { GeminiTranscriptObserver } from '../src/observers/gemini-transcript.js'
 import { recentEvents } from '../src/storage/queries.js'
+import { listSessions as listCcplSessions } from '../src/storage/ccpl-queries.js'
 import { buildTranscript, filterAfterUuid } from '../src/transcript.js'
 import { pruneOldEvents } from '../src/storage/retention.js'
 import { rollupDailyMetrics, hourlyToolCalls } from '../src/storage/metrics.js'
@@ -95,11 +87,6 @@ function saveOverrides(overrides: ContextOverrides): void {
   writeFileSync(OVERRIDES_PATH, JSON.stringify(overrides, null, 2) + '\n')
 }
 
-// --- Monitor ---
-
-const monitor = new PartyLineMonitor(NAME)
-const wsClients = new Set<ServerWebSocket<unknown>>()
-
 // --- Mission Control: hook event ingest + storage ---
 
 const CONFIG_DIR = resolve(process.env.HOME ?? '/home/claude', '.config/party-line')
@@ -122,83 +109,34 @@ const aggregator = new Aggregator(db)
 const switchboard = createSwitchboard(db)
 
 aggregator.onUpdate((session) => {
-  const json = JSON.stringify({ type: 'session-update', data: session })
-  for (const ws of wsClients) ws.send(json)
+  switchboard.broadcastObserverFrame({ type: 'session-update', data: session })
 })
 
 const jsonlObserver = new JsonlObserver(
   join(process.env.HOME ?? '/home/claude', '.claude', 'projects'),
 )
 jsonlObserver.on((u) => {
-  const json = JSON.stringify({ type: 'jsonl', data: u })
-  for (const ws of wsClients) ws.send(json)
+  switchboard.broadcastObserverFrame({ type: 'jsonl', data: u })
 })
 
 // When a JSONL file shrinks (compaction / file replacement), broadcast a
 // stream-reset event so connected clients can force a full transcript refetch
 // for the affected session.
 jsonlObserver.onReset((filePath) => {
-  const json = JSON.stringify({ type: 'stream-reset', data: { file_path: filePath } })
-  for (const ws of wsClients) ws.send(json)
+  switchboard.broadcastObserverFrame({ type: 'stream-reset', data: { file_path: filePath } })
 })
 
 const geminiObserver = new GeminiTranscriptObserver(
   join(process.env.HOME ?? '/home/claude', '.gemini', 'tmp'),
 )
 geminiObserver.on((u) => {
-  const json = JSON.stringify({ type: 'gemini-transcript', data: u })
-  for (const ws of wsClients) ws.send(json)
+  switchboard.broadcastObserverFrame({ type: 'gemini-transcript', data: u })
 })
-
-monitor.onMessage((envelope) => {
-  const permFrame = buildPermissionRequestFrame(envelope)
-  if (permFrame) {
-    const permJson = JSON.stringify(permFrame)
-    for (const ws of wsClients) ws.send(permJson)
-    return
-  }
-
-  const json = JSON.stringify({ type: 'message', data: envelope })
-  for (const ws of wsClients) {
-    ws.send(json)
-  }
-
-  if (
-    envelope.from !== envelope.to &&
-    envelope.to !== 'all' &&
-    (envelope.type === 'message' || envelope.type === 'request' || envelope.type === 'response')
-  ) {
-    const crossJson = JSON.stringify({
-      type: 'cross-call',
-      data: {
-        from: envelope.from,
-        to: envelope.to,
-        envelope_type: envelope.type,
-        message_id: envelope.id,
-        ts: envelope.ts,
-      },
-    })
-    for (const ws of wsClients) ws.send(crossJson)
-  }
-})
-
-// Periodic session list push
-setInterval(() => {
-  const sessions = monitor.getSessions()
-  const json = JSON.stringify({ type: 'sessions', data: sessions })
-  for (const ws of wsClients) {
-    ws.send(json)
-  }
-}, 5000)
 
 // Periodic quota push (every 30s — data only refreshes every 5min from API)
 setInterval(() => {
   const quota = getQuota()
   if (!quota) return
-  const json = JSON.stringify({ type: 'quota', data: quota })
-  for (const ws of wsClients) {
-    ws.send(json)
-  }
   switchboard.broadcastObserverFrame({ type: 'quota', data: quota })
 }, 30_000)
 
@@ -269,10 +207,6 @@ const server = Bun.serve({
       const unauth = requireAuth(req)
       if (unauth) return new Response('unauthorized', { status: 401 })
       if (server.upgrade(req, { data: { kind: 'observer' } })) return undefined
-      return new Response('WebSocket upgrade failed', { status: 400 })
-    }
-    if (url.pathname === '/ws') {
-      if (server.upgrade(req, { data: { kind: 'legacy' } })) return undefined
       return new Response('WebSocket upgrade failed', { status: 400 })
     }
 
@@ -363,8 +297,7 @@ const server = Bun.serve({
         onEvent: (ev) => {
           aggregator.ingest(ev)
           // Broadcast the raw hook event so the History view can live-append.
-          const json = JSON.stringify({ type: 'hook-event', data: ev })
-          for (const ws of wsClients) ws.send(json)
+          switchboard.broadcastObserverFrame({ type: 'hook-event', data: ev })
         },
       })
     }
@@ -372,9 +305,19 @@ const server = Bun.serve({
     const authFail = requireAuth(req)
     if (authFail) return authFail
 
-    // REST API: list sessions
+    // REST API: list sessions (debug-friendly view of ccpl_sessions)
     if (url.pathname === '/api/sessions') {
-      return Response.json(monitor.getSessions())
+      const rows = listCcplSessions(db).map((r) => ({
+        name: r.name,
+        online: r.online,
+        metadata: {
+          status: {
+            state: r.online ? 'idle' : 'ended',
+            sessionId: r.cc_session_uuid,
+          },
+        },
+      }))
+      return Response.json(rows)
     }
 
     // REST API: get context overrides
@@ -417,7 +360,7 @@ const server = Bun.serve({
       return Response.json(getQuota() ?? { error: 'no data yet' })
     }
 
-    // REST API: permission response — forward user decision to target session via UDP
+    // REST API: permission response — route decision to target session via switchboard
     if (url.pathname === '/api/permission-response' && req.method === 'POST') {
       return (async () => {
         let body: unknown
@@ -430,14 +373,23 @@ const server = Bun.serve({
         if (!result.ok) {
           return Response.json({ error: result.error }, { status: 400 })
         }
-        const envelope = buildPermissionResponseEnvelope({
+        const env = buildPermissionResponseEnvelope({
           from: NAME,
           session: result.value.session,
           request_id: result.value.request_id,
           behavior: result.value.behavior,
         })
-        await monitor.sendEnvelope(envelope)
-        const resolvedFrame = JSON.stringify({
+        switchboard.routeEnvelope({
+          id: env.id,
+          ts: Date.parse(env.ts),
+          from: env.from,
+          to: env.to,
+          envelope_type: env.type,
+          body: env.body,
+          callback_id: env.callback_id,
+          response_to: env.response_to,
+        })
+        switchboard.broadcastObserverFrame({
           type: 'permission-resolved',
           data: {
             session: result.value.session,
@@ -446,28 +398,48 @@ const server = Bun.serve({
             resolved_by: NAME,
           },
         })
-        for (const ws of wsClients) ws.send(resolvedFrame)
         return Response.json({ ok: true })
       })()
     }
 
-    // REST API: message history
+    // REST API: message history — reads the switchboard-persisted messages table.
     if (url.pathname === '/api/history') {
       const limit = parseInt(url.searchParams.get('limit') ?? '50', 10)
-      return Response.json(monitor.getHistory({ limit }))
+      const rows = db.query(`SELECT * FROM messages ORDER BY ts DESC LIMIT ?`).all(limit) as Array<{
+        id: string
+        ts: number
+        from_name: string
+        to_name: string
+        type: string
+        body: string | null
+        callback_id: string | null
+        response_to: string | null
+      }>
+      const envelopes = rows.reverse().map((r) => ({
+        id: r.id,
+        ts: new Date(r.ts).toISOString(),
+        from: r.from_name,
+        to: r.to_name,
+        type: r.type,
+        body: r.body ?? '',
+        callback_id: r.callback_id,
+        response_to: r.response_to,
+      }))
+      return Response.json(envelopes)
     }
 
-    // REST API: send message
+    // REST API: send message — route through the switchboard.
     if (url.pathname === '/api/send' && req.method === 'POST') {
       return (async () => {
         const body = (await req.json()) as { to?: string; message?: string; type?: string }
         if (!body.to || !body.message) {
           return Response.json({ error: '"to" and "message" required' }, { status: 400 })
         }
+        const { randomBytes } = await import('node:crypto')
         const envelope = {
           id: randomBytes(8).toString('hex'),
           ts: Date.now(),
-          from: 'dashboard',
+          from: NAME,
           to: body.to,
           envelope_type: (body.type as string) ?? 'message',
           body: body.message,
@@ -511,14 +483,13 @@ const server = Bun.serve({
       const limit = parseInt(url.searchParams.get('limit') ?? '200', 10)
       const afterUuid = url.searchParams.get('after_uuid') ?? undefined
       const projectsRoot = join(process.env.HOME ?? '/home/claude', '.claude', 'projects')
-      const envelopes = monitor.getHistory({ limit: 500, excludeHeartbeats: true })
       const all = buildTranscript({
         projectsRoot,
         sessionId: sessionUuid,
         sessionName,
         agentId,
         limit,
-        envelopes,
+        envelopes: [],
       })
       const result = afterUuid ? filterAfterUuid(all, afterUuid) : all
       return Response.json(result)
@@ -615,7 +586,7 @@ const server = Bun.serve({
     // See WebSocketHandler.data in bun-types for why this pattern exists.
     data: {} as
       | {
-          kind?: 'session' | 'observer' | 'legacy'
+          kind?: 'session' | 'observer'
           helloTimer?: ReturnType<typeof setTimeout>
           name?: string
           token?: string
@@ -642,16 +613,8 @@ const server = Bun.serve({
         switchboard.handleObserverOpen(ws as never)
         return
       }
-      // Legacy (/ws) path: existing behavior.
-      wsClients.add(ws)
-      ws.send(JSON.stringify({ type: 'sessions', data: monitor.getSessions() }))
-      const quota = getQuota()
-      if (quota) ws.send(JSON.stringify({ type: 'quota', data: quota }))
-      ws.send(JSON.stringify({ type: 'overrides', data: loadOverrides() }))
-      const history = monitor.getHistory({ limit: 100 })
-      for (const msg of history) {
-        ws.send(JSON.stringify({ type: 'message', data: msg }))
-      }
+      // Unknown kind — close.
+      ws.close(1008, 'unknown_kind')
     },
     message(ws, raw) {
       const kind = ws.data?.kind
@@ -703,34 +666,6 @@ const server = Bun.serve({
         switchboard.handleObserverFrame(ws as never, frame)
         return
       }
-      // Legacy (/ws) behavior — existing logic below
-      try {
-        const parsed = frame as {
-          action?: string
-          type?: string
-          to?: string
-          message?: string
-          callback_id?: string
-          session?: string
-        }
-        if (parsed.type === 'session-viewed' && typeof parsed.session === 'string') {
-          const dismissJson = JSON.stringify(buildDismissFrame(parsed.session))
-          for (const client of wsClients) client.send(dismissJson)
-          return
-        }
-        if (parsed.action === 'send' && parsed.to && parsed.message) {
-          void monitor.send(parsed.to, parsed.message, (parsed.type as 'message') ?? 'message')
-        } else if (
-          parsed.action === 'respond' &&
-          parsed.to &&
-          parsed.callback_id &&
-          parsed.message
-        ) {
-          void monitor.respond(parsed.to, parsed.callback_id, parsed.message)
-        }
-      } catch {
-        /* ignore */
-      }
     },
     close(ws) {
       const kind = ws.data?.kind
@@ -745,9 +680,7 @@ const server = Bun.serve({
       }
       if (kind === 'observer') {
         switchboard.handleObserverClose(ws as never)
-        return
       }
-      wsClients.delete(ws)
     },
   },
 })
@@ -755,7 +688,6 @@ const server = Bun.serve({
 // --- Start ---
 
 async function main(): Promise<void> {
-  await monitor.start()
   await jsonlObserver.start()
   await geminiObserver.start()
   startQuotaPoller(300_000) // poll every 5 minutes
@@ -777,7 +709,6 @@ async function main(): Promise<void> {
   console.log(`  Token:    ${TOKEN_PATH}`)
   console.log(`  DB:       ${DB_PATH}`)
   console.log(`  Machine:  ${machineId}`)
-  console.log(`  Multicast: 239.77.76.10:47100`)
   console.log(`  Name:     ${NAME}`)
   console.log(`  Quota:    polling every 5 min`)
   console.log()
@@ -788,7 +719,6 @@ function shutdown(): void {
   geminiObserver.stop()
   db.close()
   stopQuotaPoller()
-  monitor.stop()
   server.stop()
   process.exit(0)
 }
