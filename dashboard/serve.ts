@@ -13,6 +13,12 @@ import { join, dirname, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { PartyLineMonitor } from './monitor.js'
 import { startQuotaPoller, stopQuotaPoller, getQuota } from './quota.js'
+import {
+  buildPermissionRequestFrame,
+  validatePermissionResponseBody,
+  buildPermissionResponseEnvelope,
+  buildDismissFrame,
+} from './serve-helpers.js'
 import type { Envelope } from '../src/types.js'
 import type { ServerWebSocket } from 'bun'
 import { openDb } from '../src/storage/db.js'
@@ -108,6 +114,13 @@ geminiObserver.on((u) => {
 })
 
 monitor.onMessage((envelope) => {
+  const permFrame = buildPermissionRequestFrame(envelope)
+  if (permFrame) {
+    const permJson = JSON.stringify(permFrame)
+    for (const ws of wsClients) ws.send(permJson)
+    return
+  }
+
   const json = JSON.stringify({ type: 'message', data: envelope })
   for (const ws of wsClients) {
     ws.send(json)
@@ -157,6 +170,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const indexHtml = readFileSync(join(__dirname, 'index.html'), 'utf-8')
 const dashboardCss = readFileSync(join(__dirname, 'dashboard.css'), 'utf-8')
 const dashboardJs = readFileSync(join(__dirname, 'dashboard.js'), 'utf-8')
+const notificationsJs = readFileSync(join(__dirname, 'notifications.js'), 'utf-8')
 
 // --- Server ---
 
@@ -212,6 +226,40 @@ const server = Bun.serve({
     // REST API: quota status
     if (url.pathname === '/api/quota') {
       return Response.json(getQuota() ?? { error: 'no data yet' })
+    }
+
+    // REST API: permission response — forward user decision to target session via UDP
+    if (url.pathname === '/api/permission-response' && req.method === 'POST') {
+      return (async () => {
+        let body: unknown
+        try {
+          body = await req.json()
+        } catch {
+          return Response.json({ error: 'invalid JSON' }, { status: 400 })
+        }
+        const result = validatePermissionResponseBody(body)
+        if (!result.ok) {
+          return Response.json({ error: result.error }, { status: 400 })
+        }
+        const envelope = buildPermissionResponseEnvelope({
+          from: NAME,
+          session: result.value.session,
+          request_id: result.value.request_id,
+          behavior: result.value.behavior,
+        })
+        await monitor.sendEnvelope(envelope)
+        const resolvedFrame = JSON.stringify({
+          type: 'permission-resolved',
+          data: {
+            session: result.value.session,
+            request_id: result.value.request_id,
+            behavior: result.value.behavior,
+            resolved_by: NAME,
+          },
+        })
+        for (const ws of wsClients) ws.send(resolvedFrame)
+        return Response.json({ ok: true })
+      })()
     }
 
     // REST API: message history
@@ -309,9 +357,10 @@ const server = Bun.serve({
     // REST API: machines
     if (url.pathname === '/api/machines') {
       const machines = db
-        .query<{ id: string; hostname: string; first_seen: string; last_seen: string }, []>(
-          'SELECT * FROM machines ORDER BY last_seen DESC',
-        )
+        .query<
+          { id: string; hostname: string; first_seen: string; last_seen: string },
+          []
+        >('SELECT * FROM machines ORDER BY last_seen DESC')
         .all()
       return Response.json(machines)
     }
@@ -335,6 +384,11 @@ const server = Bun.serve({
     }
     if (url.pathname === '/dashboard.js') {
       return new Response(dashboardJs, { headers: { 'Content-Type': 'application/javascript' } })
+    }
+    if (url.pathname === '/notifications.js') {
+      return new Response(notificationsJs, {
+        headers: { 'Content-Type': 'application/javascript' },
+      })
     }
 
     // Dashboard HTML
@@ -360,10 +414,16 @@ const server = Bun.serve({
       try {
         const parsed = JSON.parse(String(data)) as {
           action?: string
+          type?: string
           to?: string
           message?: string
-          type?: string
           callback_id?: string
+          session?: string
+        }
+        if (parsed.type === 'session-viewed' && typeof parsed.session === 'string') {
+          const dismissJson = JSON.stringify(buildDismissFrame(parsed.session))
+          for (const client of wsClients) client.send(dismissJson)
+          return
         }
         if (parsed.action === 'send' && parsed.to && parsed.message) {
           void monitor.send(parsed.to, parsed.message, (parsed.type as 'message') ?? 'message')

@@ -10,14 +10,13 @@ import { basename } from 'node:path'
 import { readFileSync } from 'fs'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import {
-  ListToolsRequestSchema,
-  CallToolRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js'
+import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { z } from 'zod'
 import { UdpMulticastTransport } from './transport/udp-multicast.js'
 import { PresenceTracker } from './presence.js'
 import { createEnvelope, generateCallbackId } from './protocol.js'
 import { getSessionStatus } from './introspect.js'
+import { createPermissionBridge } from './permission-bridge.js'
 import type { Envelope, MessageType } from './types.js'
 
 // --- Session name resolution ---
@@ -32,7 +31,7 @@ function resolveNameFromProcessTree(): string | null {
       const args = cmdlineRaw.split('\0').filter(Boolean)
 
       // Check if this is a claude process
-      const isClaude = args.some(arg => arg.endsWith('/claude') || arg === 'claude')
+      const isClaude = args.some((arg) => arg.endsWith('/claude') || arg === 'claude')
       if (isClaude) {
         // Look for --name or -n flag
         for (let j = 0; j < args.length - 1; j++) {
@@ -115,6 +114,7 @@ const mcp = new Server(
     capabilities: {
       experimental: {
         'claude/channel': {},
+        'claude/channel/permission': {},
       },
       tools: {},
     },
@@ -140,6 +140,36 @@ const mcp = new Server(
   },
 )
 
+// --- Permission bridge (MCP ↔ UDP for claude/channel/permission) ---
+
+const permissionBridge = createPermissionBridge({
+  sessionName,
+  sendEnvelope: (envelope) => {
+    void transport.send(envelope)
+  },
+  sendMcpNotification: ({ request_id, behavior }) => {
+    void mcp.notification({
+      method: 'notifications/claude/channel/permission',
+      params: { request_id, behavior },
+    })
+  },
+})
+
+mcp.setNotificationHandler(
+  z.object({
+    method: z.literal('notifications/claude/channel/permission_request'),
+    params: z.object({
+      request_id: z.string(),
+      tool_name: z.string(),
+      description: z.string(),
+      input_preview: z.string(),
+    }),
+  }),
+  async ({ params }) => {
+    permissionBridge.handlePermissionRequest(params)
+  },
+)
+
 // --- Handle inbound messages ---
 
 function handleInbound(envelope: Envelope): void {
@@ -152,10 +182,23 @@ function handleInbound(envelope: Envelope): void {
   // Only deliver user-initiated messages — filter out presence protocol traffic
   if (envelope.type === 'heartbeat' || envelope.type === 'announce') return
 
+  // Permission envelopes use a dedicated MCP notification path, not claude/channel.
+  if (envelope.type === 'permission-response' && envelope.to === sessionName) {
+    permissionBridge.handlePermissionResponseEnvelope(envelope)
+    return
+  }
+  if (envelope.type === 'permission-request') {
+    // permission-request envelopes are for the dashboard, not other sessions
+    return
+  }
+
   const isForUs =
     envelope.to === sessionName ||
     envelope.to === 'all' ||
-    envelope.to.split(',').map((s) => s.trim()).includes(sessionName)
+    envelope.to
+      .split(',')
+      .map((s) => s.trim())
+      .includes(sessionName)
 
   if (!isForUs) return
 
@@ -200,8 +243,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'party_line_send',
-      description:
-        'Send a message to another Claude Code session by name. Use "all" to broadcast.',
+      description: 'Send a message to another Claude Code session by name. Use "all" to broadcast.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -350,13 +392,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
         const isSelf = s.name === sessionName ? ' (this session)' : ''
         const status = s.metadata?.status
         if (status) {
-          const stateIcon = status.state === 'working' ? '🔄' : status.state === 'idle' ? '💤' : '❓'
+          const stateIcon =
+            status.state === 'working' ? '🔄' : status.state === 'idle' ? '💤' : '❓'
           const branch = status.gitBranch ? ` [${status.gitBranch}]` : ''
           const tool = status.currentTool ? ` running ${status.currentTool}` : ''
           const modelShort = status.model ? ` (${status.model.replace('claude-', '')})` : ''
-          const ctx = status.contextTokens !== null
-            ? ` ctx:${Math.round((status.contextTokens ?? 0) / 1000)}k`
-            : ''
+          const ctx =
+            status.contextTokens !== null
+              ? ` ctx:${Math.round((status.contextTokens ?? 0) / 1000)}k`
+              : ''
           const msgs = status.messageCount ? ` msgs:${status.messageCount}` : ''
           const lastText = status.lastText ? `\n    "${status.lastText.slice(0, 80)}"` : ''
           return `- ${stateIcon} ${s.name}${isSelf}${modelShort}${branch}${tool}${ctx}${msgs}${lastText}`
@@ -383,7 +427,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'party_line_set_name': {
-      const newName = String(args?.name ?? '').trim().toLowerCase()
+      const newName = String(args?.name ?? '')
+        .trim()
+        .toLowerCase()
       if (!newName || newName.length > 30) {
         return { content: [{ type: 'text', text: 'Error: name must be 1-30 characters.' }] }
       }

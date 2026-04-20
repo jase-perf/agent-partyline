@@ -1,5 +1,13 @@
 /** Message types on the party line. */
-export type MessageType = 'message' | 'request' | 'response' | 'status' | 'heartbeat' | 'announce'
+export type MessageType =
+  | 'message'
+  | 'request'
+  | 'response'
+  | 'status'
+  | 'heartbeat'
+  | 'announce'
+  | 'permission-request'
+  | 'permission-response'
 
 /** The wire format for all party line messages. */
 export interface Envelope {
