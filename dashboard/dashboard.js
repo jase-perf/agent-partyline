@@ -221,10 +221,11 @@ function connect() {
       addMessage(data.data);
       addMessageToBus(data.data);
       if (data.data.to && data.data.to !== 'all') bumpUnread(data.data.to);
-      // Live-update the session-detail stream if the envelope involves the viewed session.
+      // Live-append to the session-detail stream without re-fetching the
+      // full transcript (instant feedback for sent + received messages).
       if (currentView === 'session-detail' && selectedSessionId &&
           (data.data.from === selectedSessionId || data.data.to === selectedSessionId)) {
-        renderStream();
+        appendEnvelopeToStream(data.data);
       }
     }
     else if (data.type === 'quota') updateQuota(data.data);
@@ -784,6 +785,36 @@ function handleJsonlEvent(update) {
   renderStream();
 }
 
+// Append a single party-line envelope directly to the stream without a
+// full /api/transcript fetch. Used for instant self-loopback feedback.
+function appendEnvelopeToStream(envelope) {
+  if (!envelope || !selectedSessionId) return;
+  const root = document.getElementById('detail-stream');
+  if (!root) return;
+  const key = envelope.id;
+  if (renderedEntryKeys.has(key)) return;
+  const isSent = envelope.from === selectedSessionId;
+  const entry = {
+    uuid: envelope.id,
+    ts: envelope.ts,
+    type: isSent ? 'party-line-send' : 'party-line-receive',
+    envelope_id: envelope.id,
+    other_session: isSent ? envelope.to : envelope.from,
+    body: envelope.body,
+    callback_id: envelope.callback_id || undefined,
+    envelope_type: envelope.type,
+  };
+  const wasNear = isNearBottom(root);
+  renderedEntryKeys.add(key);
+  root.appendChild(renderEntry(entry));
+  if (wasNear) {
+    root.scrollTop = root.scrollHeight;
+    missedWhileScrolledUp = 0;
+  } else {
+    updateScrollToBottomButton(1);
+  }
+}
+
 // --- Session detail view ---
 
 function hookClass(hookEvent) {
@@ -955,10 +986,26 @@ function renderDetailHeader(session) {
   pill.className = 'state-pill state-' + (session.state || 'idle');
   pill.textContent = (session.state || 'idle').toUpperCase();
   document.getElementById('detail-cwd').textContent = session.cwd || '';
-  document.getElementById('detail-model').textContent = session.model ? session.model.replace('claude-', '') : '';
-  document.getElementById('detail-ctx').textContent = session.context_tokens
-    ? 'ctx ' + formatTokens(session.context_tokens)
-    : '';
+
+  // Fall back to multicast status for ctx/model since the aggregator's
+  // sessions table doesn't capture those from hook payloads.
+  const name = session.name || selectedSessionId;
+  const multicast = (lastSessions || []).find((x) => x.name === name);
+  const st = multicast && multicast.metadata && multicast.metadata.status;
+
+  const model = session.model || (st && st.model);
+  document.getElementById('detail-model').textContent = model ? model.replace('claude-', '') : '';
+
+  const ctxTokens = (st && st.contextTokens) || session.context_tokens;
+  const ctxEl = document.getElementById('detail-ctx');
+  if (ctxTokens) {
+    const limit = getEffectiveContextLimit(name, st);
+    const pct = Math.round((ctxTokens / limit) * 100);
+    ctxEl.textContent = 'ctx ' + formatTokens(ctxTokens) + ' / ' + formatTokens(limit) + ' (' + pct + '%)';
+  } else {
+    ctxEl.textContent = '';
+  }
+
   const hostEl = document.getElementById('detail-host');
   if (session.machine_id && localMachineId && session.machine_id !== localMachineId) {
     hostEl.textContent = 'host: ' + session.machine_id.slice(0, 8);
@@ -1330,23 +1377,33 @@ function appendSpawnMarker(wrap, e) {
 
   const summary = document.createElement('summary');
   const title = document.createElement('strong');
-  title.textContent = '→ spawned ' + (e.agent_type || 'subagent');
+  title.textContent = '▸ spawned ' + (e.agent_type || 'subagent');
   summary.appendChild(title);
   if (e.description) {
+    const short = e.description.length > 80 ? e.description.slice(0, 80) + '…' : e.description;
     const sep = document.createTextNode(': ');
     const desc = document.createElement('span');
     desc.className = 'spawn-desc-inline';
-    desc.textContent = e.description;
+    desc.textContent = short;
     summary.appendChild(sep);
     summary.appendChild(desc);
   }
   details.appendChild(summary);
 
+  // Body: full description (if long) + "View this agent" action.
+  if (e.description && e.description.length > 80) {
+    const full = document.createElement('div');
+    full.className = 'spawn-desc-full';
+    full.textContent = e.description;
+    details.appendChild(full);
+  }
   if (e.agent_id) {
-    const hint = document.createElement('div');
-    hint.className = 'spawn-click';
-    hint.textContent = 'Click anywhere on this row to view the subagent';
-    details.appendChild(hint);
+    const viewBtn = document.createElement('button');
+    viewBtn.type = 'button';
+    viewBtn.className = 'view-agent';
+    viewBtn.dataset.agentId = e.agent_id;
+    viewBtn.textContent = 'View this agent →';
+    details.appendChild(viewBtn);
   }
   wrap.appendChild(details);
 }
@@ -1593,11 +1650,12 @@ document.getElementById('detail-stream').addEventListener('click', (e) => {
     return;
   }
 
-  const spawn = e.target.closest('.spawn-marker');
-  if (spawn) {
-    e.preventDefault();           // stop native details toggle
-    const aid = spawn.dataset.agentId;
-    if (aid) navigate({ view: 'session-detail', sessionName: selectedSessionId, agentId: aid });
+  // Spawn marker: summary toggle (native <details>); only the explicit
+  // "View this agent" button navigates to the subagent.
+  const viewAgentBtn = e.target.closest('.view-agent');
+  if (viewAgentBtn && viewAgentBtn.dataset.agentId) {
+    e.preventDefault();
+    navigate({ view: 'session-detail', sessionName: selectedSessionId, agentId: viewAgentBtn.dataset.agentId });
     return;
   }
 

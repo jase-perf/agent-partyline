@@ -902,3 +902,33 @@ details.spawn-marker summary::-webkit-details-marker { display: none; }
   .header-quota { margin-left: 4px; gap: 3px; }
   .quota-pip { font-size: 9px; padding: 1px 5px; }
 }
+
+/* Tool-use and spawn-marker word wrap for long commands / descriptions */
+.tool-use pre, .tool-input pre, .tool-response pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.spawn-desc-full {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: rgba(13, 17, 23, 0.6);
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.view-agent {
+  margin-top: 6px;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 3px 10px;
+  border-radius: 3px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.view-agent:hover { background: rgba(88, 166, 255, 0.1); }
+details.spawn-marker { cursor: default; }
