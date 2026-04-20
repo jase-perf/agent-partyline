@@ -134,13 +134,7 @@ function applyRoute(state, opts) {
       Array.isArray(lastSessions) && lastSessions.some((s) => s.name === state.sessionName)
     selectedSessionId = state.sessionName
     selectedAgentId = state.agentId || null
-    // `notif` is declared later in this module; during the initial applyRoute
-    // from parseUrl() it isn't defined yet (TDZ), so guard defensively.
-    try {
-      notif.dispatchSessionViewed(state.sessionName)
-    } catch {
-      /* notif not yet initialized */
-    }
+    notif.dispatchSessionViewed(state.sessionName)
     if (sessionDetailTab) {
       sessionDetailTab.disabled = false
     }
@@ -1949,35 +1943,6 @@ window.addEventListener('popstate', (e) => {
   applyRoute(state, { skipPush: true })
 })
 
-// Apply the initial route from URL
-applyRoute(parseUrl(), { skipPush: true })
-
-// --- Mobile keyboard handling ---
-// On iOS Safari the on-screen keyboard is an overlay that does not affect
-// 100dvh, so a sticky-positioned send bar ends up behind the keyboard and the
-// user sees empty padding after the keyboard dismisses. Track the visual
-// viewport and resize the body to match. Preserve stream scroll position
-// across the resize so the user doesn't get yanked to the top.
-if (window.visualViewport) {
-  const vv = window.visualViewport
-  function updateViewportHeight() {
-    // Record stream scroll bottom-distance before the resize changes heights.
-    const stream = document.getElementById('detail-stream')
-    const bottomDist = stream ? stream.scrollHeight - stream.scrollTop - stream.clientHeight : null
-    document.body.style.height = vv.height + 'px'
-    // Restore relative bottom-anchor after reflow.
-    if (stream && bottomDist !== null && bottomDist < 80) {
-      // User was near bottom → keep them there as heights shift.
-      requestAnimationFrame(() => {
-        stream.scrollTop = stream.scrollHeight - stream.clientHeight
-      })
-    }
-  }
-  vv.addEventListener('resize', updateViewportHeight)
-  vv.addEventListener('scroll', updateViewportHeight)
-  updateViewportHeight()
-}
-
 // --- Browser notifications ---
 
 // Expose inline-handler targets on window so they remain callable from
@@ -2019,6 +1984,35 @@ const notif = createNotifications({
   },
   fetch: (url) => fetch(url),
 })
+
+// Apply the initial route from URL
+applyRoute(parseUrl(), { skipPush: true })
+
+// --- Mobile keyboard handling ---
+// On iOS Safari the on-screen keyboard is an overlay that does not affect
+// 100dvh, so a sticky-positioned send bar ends up behind the keyboard and the
+// user sees empty padding after the keyboard dismisses. Track the visual
+// viewport and resize the body to match. Preserve stream scroll position
+// across the resize so the user doesn't get yanked to the top.
+if (window.visualViewport) {
+  const vv = window.visualViewport
+  function updateViewportHeight() {
+    // Record stream scroll bottom-distance before the resize changes heights.
+    const stream = document.getElementById('detail-stream')
+    const bottomDist = stream ? stream.scrollHeight - stream.scrollTop - stream.clientHeight : null
+    document.body.style.height = vv.height + 'px'
+    // Restore relative bottom-anchor after reflow.
+    if (stream && bottomDist !== null && bottomDist < 80) {
+      // User was near bottom → keep them there as heights shift.
+      requestAnimationFrame(() => {
+        stream.scrollTop = stream.scrollHeight - stream.clientHeight
+      })
+    }
+  }
+  vv.addEventListener('resize', updateViewportHeight)
+  vv.addEventListener('scroll', updateViewportHeight)
+  updateViewportHeight()
+}
 
 function updateBanner() {
   const banner = document.getElementById('notif-banner')
@@ -2231,11 +2225,7 @@ function updatePermissionCardResolved(data) {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return
   if (currentView !== 'session-detail' || !selectedSessionId) return
-  try {
-    notif.dispatchSessionViewed(selectedSessionId)
-  } catch {
-    /* notif not yet initialized */
-  }
+  notif.dispatchSessionViewed(selectedSessionId)
 })
 
 connect()
