@@ -209,6 +209,29 @@ The `/ingest` endpoint is designed for localhost + LAN. A remote machine (e.g. a
 - **Machines** — one card per host reporting events, with last-seen and session counts
 - **History** — filterable event feed across all sessions and machines
 
+### Incremental transcript strategy (SB-26)
+
+Session detail live updates previously did a full `/api/transcript?limit=300` fetch on every JSONL append or hook event. For long sessions this means re-reading and re-parsing the entire file on every poll tick.
+
+**Server side** (`src/transcript.ts`, `dashboard/serve.ts`):
+
+- `GET /api/transcript?session_id=X&after_uuid=<uuid>` — `buildTranscript` builds the full list as before (preserving all tool_use + tool_result merge logic), then `filterAfterUuid()` slices to entries after the given uuid's position. O(n) but avoids network overhead on large responses.
+- If `after_uuid` is not found in the current list (stale uuid after compaction), `filterAfterUuid` returns the full list as a graceful fallback — the client gets a complete resync without a separate error path.
+
+**Client side** (`dashboard/dashboard.js`):
+
+- `lastRenderedUuid` tracks the uuid of the most recently rendered transcript entry.
+- `handleJsonlEvent` and the `session-update` path call `renderStream({ incremental: true })`, which adds `&after_uuid=<lastRenderedUuid>` to the fetch when a prior cursor exists.
+- `renderStream` appends new entries from the response (using the existing `renderedEntryKeys` dedup set), then updates `lastRenderedUuid` to the newest appended entry.
+- `lastRenderedUuid` is reset to `null` on every full rebuild (new session, force refetch), so the first load always fetches everything.
+
+**Truncation / compaction recovery**:
+
+- The JSONL observer's `poll()` detects file shrinks (`newSize < prevOffset`) and uses a fingerprint (first 64 bytes) to confirm the file content changed. On shrink, it resets the offset and fires `onReset(filePath)`.
+- `serve.ts` listens to `onReset` and broadcasts a `stream-reset` WebSocket event to all clients.
+- Clients matching the reset file to the current view call `renderStream({ force: true })`, which wipes `lastRenderedUuid` and fetches fresh.
+- Independently, a `SessionStart` hook event with `payload.source === 'compact'` (Claude Code's compaction signal) triggers the same force refetch via `maybeHandleCompactForCurrentView()`.
+
 ### Gemini CLI support
 
 Gemini CLI has a near-parity hooks system (configured in `~/.gemini/settings.json`) and auto-saves per-session transcripts at `~/.gemini/tmp/<project_hash>/chats/session-*.json` as a single JSON file (not JSONL). Mission Control supports both:
@@ -319,6 +342,14 @@ Note: Claude Code does not expose `--name` via env var to MCP subprocesses. The 
 5. **Permission relay design**: forwarding tool approval prompts across sessions requires careful design — what's the right UX? Block the requesting session while waiting? Timeout and auto-deny? Currently unresolved.
 6. **Tool-call success detection** — `PostToolUse.tool_response` shape is tool-specific. Currently we heuristically detect failure via `tool_response.success === false`, `isError === true`, or `error` presence. A proper taxonomy per tool type would be more reliable.
 7. **Hook propagation into subagents** — not empirically verified whether `PreToolUse`/`PostToolUse` hooks configured in `~/.claude/settings.json` fire for tool calls originating in a subagent. We shipped with `SubagentStop` + subagent-transcript fallback (`<session>/subagents/agent-<id>.jsonl` tailing), but the parent-hook propagation path has **not been empirically confirmed**. If hooks do propagate into subagents, events will arrive with an `agent_id` field; if they don't, we rely entirely on the JSONL tail for subagent activity.
+
+### Compaction handling (resolved design, 2026-04-20)
+
+When Claude Code compact-mode rewrites a session JSONL, the file is replaced with a shorter summary file. The JSONL observer detects this via size comparison: if `newSize < prevOffset`, it resets the file offset and emits a synthetic `stream-reset` event to the client. The client then forces a full `/api/transcript` refetch, discarding the stale incremental cursor (`lastRenderedUuid`).
+
+For hook events: a `SessionStart` event with `payload.source === 'compact'` is the canonical signal that compaction occurred. The dashboard client's `maybeHandleCompactForCurrentView()` catches this and calls `renderStream({ force: true })` for the currently-viewed session.
+
+Both paths converge on a clean re-render without requiring manual refresh from the user.
 
 ## Resolved Questions
 

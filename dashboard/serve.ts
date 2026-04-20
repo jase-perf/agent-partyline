@@ -23,7 +23,7 @@ import { getMachineId } from '../src/machine-id.js'
 import { JsonlObserver } from '../src/observers/jsonl.js'
 import { GeminiTranscriptObserver } from '../src/observers/gemini-transcript.js'
 import { recentEvents } from '../src/storage/queries.js'
-import { buildTranscript } from '../src/transcript.js'
+import { buildTranscript, filterAfterUuid } from '../src/transcript.js'
 import { pruneOldEvents } from '../src/storage/retention.js'
 import { rollupDailyMetrics, hourlyToolCalls } from '../src/storage/metrics.js'
 
@@ -88,6 +88,14 @@ const jsonlObserver = new JsonlObserver(
 )
 jsonlObserver.on((u) => {
   const json = JSON.stringify({ type: 'jsonl', data: u })
+  for (const ws of wsClients) ws.send(json)
+})
+
+// When a JSONL file shrinks (compaction / file replacement), broadcast a
+// stream-reset event so connected clients can force a full transcript refetch
+// for the affected session.
+jsonlObserver.onReset((filePath) => {
+  const json = JSON.stringify({ type: 'stream-reset', data: { file_path: filePath } })
   for (const ws of wsClients) ws.send(json)
 })
 
@@ -259,6 +267,11 @@ const server = Bun.serve({
     }
 
     // REST API: JSONL transcript for a session or subagent
+    // Supports optional `after_uuid` param for incremental fetches:
+    //   ?after_uuid=<uuid>  — return only entries whose position in the
+    //   built transcript comes after the entry with the given uuid.
+    //   If after_uuid is unknown (stale, file compacted), the full transcript
+    //   is returned as a graceful fallback.
     if (url.pathname === '/api/transcript') {
       const sidParam = url.searchParams.get('session_id')
       if (!sidParam) return Response.json({ error: 'session_id required' }, { status: 400 })
@@ -267,16 +280,19 @@ const server = Bun.serve({
       const sessionName = resolved?.name ?? sidParam
       const agentId = url.searchParams.get('agent_id') ?? undefined
       const limit = parseInt(url.searchParams.get('limit') ?? '200', 10)
+      const afterUuid = url.searchParams.get('after_uuid') ?? undefined
       const projectsRoot = join(process.env.HOME ?? '/home/claude', '.claude', 'projects')
       const envelopes = monitor.getHistory({ limit: 500, excludeHeartbeats: true })
-      return Response.json(buildTranscript({
+      const all = buildTranscript({
         projectsRoot,
         sessionId: sessionUuid,
         sessionName,
         agentId,
         limit,
         envelopes,
-      }))
+      })
+      const result = afterUuid ? filterAfterUuid(all, afterUuid) : all
+      return Response.json(result)
     }
 
     // REST API: sparkline (hourly tool calls over last 24h for a session)
