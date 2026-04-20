@@ -413,6 +413,39 @@ const server = Bun.serve({
       })
     }
 
+    // --- Static PWA assets ---
+    if (url.pathname === '/sw.js') {
+      return new Response(Bun.file(resolve(__dirname, 'sw.js')), {
+        headers: {
+          'Content-Type': 'application/javascript',
+          'Service-Worker-Allowed': '/',
+          'Cache-Control': 'no-cache',
+        },
+      })
+    }
+
+    if (url.pathname === '/manifest.json') {
+      return new Response(Bun.file(resolve(__dirname, 'manifest.json')), {
+        headers: {
+          'Content-Type': 'application/manifest+json',
+          'Cache-Control': 'public, max-age=3600',
+        },
+      })
+    }
+
+    if (url.pathname.startsWith('/icons/')) {
+      const rel = url.pathname.slice(1) // strip leading /
+      if (rel.includes('..')) {
+        return new Response('Not found', { status: 404 })
+      }
+      return new Response(Bun.file(resolve(__dirname, rel)), {
+        headers: {
+          'Content-Type': 'image/png',
+          'Cache-Control': 'public, max-age=86400',
+        },
+      })
+    }
+
     // Dashboard HTML
     return new Response(indexHtml, {
       headers: { 'Content-Type': 'text/html' },
