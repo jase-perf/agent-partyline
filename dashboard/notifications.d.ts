@@ -23,6 +23,7 @@ export interface NotificationDeps {
   sendWsFrame: (frame: unknown) => void
   getCurrentRoute: () => string
   navigate: (route: string) => void
+  fetch?: (url: string) => Promise<{ ok: boolean; json: () => Promise<unknown> }>
 }
 
 export interface SessionUpdate {

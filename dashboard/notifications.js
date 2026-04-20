@@ -16,6 +16,7 @@ const STORAGE_KEY = 'partyLineNotifications'
  * @property {(frame: unknown) => void} sendWsFrame
  * @property {() => string} getCurrentRoute
  * @property {(route: string) => void} navigate
+ * @property {typeof fetch} [fetch]
  */
 
 /**
@@ -94,12 +95,41 @@ export function createNotifications(deps) {
       if (!deps.NotificationCtor) return 'unsupported'
       return await deps.NotificationCtor.requestPermission()
     },
-    onSessionUpdate(update) {
+    async onSessionUpdate(update) {
       if (!update || !update.name) return
       const prev = lastKnownState.get(update.name)
       lastKnownState.set(update.name, update.state)
       if (prev === 'working' && update.state === 'idle' && shouldFire(update.name)) {
-        const body = lastAssistantText.get(update.name) || 'Claude is waiting'
+        let body = 'Claude is waiting'
+        try {
+          const sid = update.session_id
+          if (sid && deps.fetch) {
+            const res = await deps.fetch(
+              '/api/transcript?session_id=' + encodeURIComponent(sid) + '&limit=5',
+            )
+            if (res.ok) {
+              const entries = await res.json()
+              if (Array.isArray(entries)) {
+                for (let i = entries.length - 1; i >= 0; i--) {
+                  const e = entries[i]
+                  if (
+                    e &&
+                    e.type === 'assistant-text' &&
+                    typeof e.text === 'string' &&
+                    e.text.trim()
+                  ) {
+                    const t = e.text.trim()
+                    body = t.length > 120 ? t.slice(0, 120) + '…' : t
+                    lastAssistantText.set(update.name, body)
+                    break
+                  }
+                }
+              }
+            }
+          }
+        } catch {
+          // fall back to generic body
+        }
         fire(update.name, update.name, body)
       }
     },

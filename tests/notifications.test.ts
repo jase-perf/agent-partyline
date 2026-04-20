@@ -1,4 +1,4 @@
-import { test, expect, describe } from 'bun:test'
+import { test, expect, describe, mock } from 'bun:test'
 import { createNotifications } from '../dashboard/notifications.js'
 import { mockDeps } from './_notification-helpers.js'
 
@@ -311,5 +311,39 @@ describe('createNotifications — auto-dismiss', async () => {
     const notif = createNotifications(ctx)
     notif.dispatchSessionViewed('research')
     expect(wsSends).toEqual([{ type: 'session-viewed', session: 'research' }])
+  })
+})
+
+describe('createNotifications — last assistant text', async () => {
+  test('Trigger A fetches transcript and uses last assistant text as body', async () => {
+    const { ctx, fired, setFetchResponse } = mockDeps()
+    ctx.doc.hidden = true
+    setFetchResponse([
+      { type: 'user', text: 'hi' },
+      { type: 'assistant-text', text: 'The answer is 42.' },
+    ])
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    await notif.onSessionUpdate({ session_id: 'research-sid', name: 'research', state: 'working' })
+    await notif.onSessionUpdate({ session_id: 'research-sid', name: 'research', state: 'idle' })
+
+    expect(fired).toHaveLength(1)
+    expect(fired[0]!.options.body).toContain('42')
+  })
+
+  test('Trigger A falls back to "Claude is waiting" when transcript fetch fails', async () => {
+    const { ctx, fired } = mockDeps({
+      fetch: mock(async () => {
+        throw new Error('network')
+      }),
+    })
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'working' })
+    await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'idle' })
+
+    expect(fired).toHaveLength(1)
+    expect(fired[0]!.options.body).toBe('Claude is waiting')
   })
 })

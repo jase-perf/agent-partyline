@@ -43,6 +43,7 @@ export interface NotificationTestCtx {
   sendWsFrame: (frame: unknown) => void
   getCurrentRoute: () => string
   navigate: ReturnType<typeof mock>
+  fetch: (url: string) => Promise<{ ok: boolean; json: () => Promise<unknown> }>
 }
 
 export function mockDeps(overrides: Partial<NotificationTestCtx> = {}): {
@@ -54,6 +55,8 @@ export function mockDeps(overrides: Partial<NotificationTestCtx> = {}): {
   doc: DocumentLike
   win: WindowLike & { focus: ReturnType<typeof mock> }
   instances: FakeNotificationBase[]
+  fetchCalls: string[]
+  setFetchResponse: (r: unknown) => void
 } {
   const store = new Map<string, string>()
   const localStorage: StorageLike = {
@@ -80,6 +83,15 @@ export function mockDeps(overrides: Partial<NotificationTestCtx> = {}): {
   const doc: DocumentLike = { hidden: false }
   const win: WindowLike & { focus: ReturnType<typeof mock> } = { focus: mock(() => {}) }
   const wsSends: unknown[] = []
+  const fetchCalls: string[] = []
+  let fetchResponse: unknown = []
+  const fetchMock = mock(async (url: string) => {
+    fetchCalls.push(url)
+    return {
+      ok: true,
+      json: async () => fetchResponse,
+    }
+  })
   const ctx: NotificationTestCtx = {
     NotificationCtor: FakeNotification as unknown as FakeNotificationCtor,
     localStorage,
@@ -88,6 +100,7 @@ export function mockDeps(overrides: Partial<NotificationTestCtx> = {}): {
     sendWsFrame: (frame: unknown) => void wsSends.push(frame),
     getCurrentRoute: () => '/switchboard',
     navigate: mock((_route: string) => {}),
+    fetch: fetchMock,
     ...overrides,
   }
   return {
@@ -99,5 +112,9 @@ export function mockDeps(overrides: Partial<NotificationTestCtx> = {}): {
     doc,
     win,
     instances,
+    fetchCalls,
+    setFetchResponse: (r: unknown) => {
+      fetchResponse = r
+    },
   }
 }
