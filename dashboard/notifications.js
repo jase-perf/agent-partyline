@@ -103,5 +103,16 @@ export function createNotifications(deps) {
         fire(update.name, update.name, body)
       }
     },
+    onPartyLineMessage(envelope) {
+      if (!envelope || envelope.type !== 'message') return
+      for (const [sessionName] of settings) {
+        if (envelope.to !== sessionName && envelope.to !== 'all') continue
+        if (envelope.from === sessionName) continue
+        if (!shouldFire(sessionName)) continue
+        const bodyText = String(envelope.body || '')
+        const preview = bodyText.length > 120 ? bodyText.slice(0, 120) + '…' : bodyText
+        fire(sessionName, sessionName, (envelope.from || '?') + ': ' + preview)
+      }
+    },
   }
 }

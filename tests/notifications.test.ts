@@ -97,3 +97,72 @@ describe('createNotifications — trigger A (working→idle)', async () => {
     expect(fired).toHaveLength(0)
   })
 })
+
+describe('createNotifications — trigger B (party-line message)', async () => {
+  function envelope(overrides = {}) {
+    return {
+      id: 'x',
+      seq: 0,
+      from: 'discord',
+      to: 'research',
+      type: 'message',
+      body: 'hello',
+      callback_id: null,
+      response_to: null,
+      ts: '2026-04-20T00:00:00Z',
+      ...overrides,
+    }
+  }
+
+  test('fires when envelope addressed directly to session', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    notif.onPartyLineMessage(envelope())
+    expect(fired).toHaveLength(1)
+    expect(fired[0].title).toBe('research')
+    expect(fired[0].options.body).toContain('discord')
+    expect(fired[0].options.body).toContain('hello')
+  })
+
+  test('fires on broadcast (to=all)', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    notif.onPartyLineMessage(envelope({ to: 'all' }))
+    expect(fired).toHaveLength(1)
+  })
+
+  test('does not fire if envelope.from equals the session', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    notif.onPartyLineMessage(envelope({ from: 'research' }))
+    expect(fired).toHaveLength(0)
+  })
+
+  test('filters heartbeat and announce', async () => {
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    notif.onPartyLineMessage(envelope({ type: 'heartbeat' }))
+    notif.onPartyLineMessage(envelope({ type: 'announce' }))
+    notif.onPartyLineMessage(envelope({ type: 'receipt' }))
+    notif.onPartyLineMessage(envelope({ type: 'response' }))
+    expect(fired).toHaveLength(0)
+  })
+
+  test('truncates body to 120 chars', async () => {
+    const longBody = 'x'.repeat(500)
+    const { ctx, fired } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    notif.onPartyLineMessage(envelope({ body: longBody }))
+    expect(fired[0].options.body.length).toBeLessThanOrEqual(140) // "from: " + 120 + ellipsis
+  })
+})
