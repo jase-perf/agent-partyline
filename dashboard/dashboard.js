@@ -2119,6 +2119,15 @@ function updateBellUIEverywhere(session) {
   })
 }
 
+function refreshNotifState() {
+  updateBanner()
+  // Re-render every bell — the disabled class depends on permission state.
+  document.querySelectorAll('.notif-bell').forEach((bell) => {
+    const session = bell.getAttribute('data-session')
+    if (session) updateBellUIEverywhere(session)
+  })
+}
+
 // Delegated bell-toggle handler on the Switchboard grid.
 document.getElementById('overview-grid')?.addEventListener('click', (ev) => {
   const target = ev.target
@@ -2257,10 +2266,25 @@ function updatePermissionCardResolved(data) {
 
 // When the tab becomes visible again, dispatch session-viewed for the current
 // session (if any) so any pending notifications for it get dismissed.
+// Also refresh permission state in case it changed in another tab.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return
   if (currentView !== 'session-detail' || !selectedSessionId) return
   notif.dispatchSessionViewed(selectedSessionId)
+  refreshNotifState()
 })
+
+window.addEventListener('focus', refreshNotifState)
+
+if (navigator.permissions && navigator.permissions.query) {
+  navigator.permissions
+    .query({ name: 'notifications' })
+    .then((status) => {
+      status.onchange = refreshNotifState
+    })
+    .catch(() => {
+      // Some Safari versions throw on name: 'notifications'. Fine — fall through.
+    })
+}
 
 connect()
