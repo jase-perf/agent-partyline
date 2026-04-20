@@ -94,8 +94,8 @@ async function main(): Promise<void> {
               const branch = st.gitBranch ? `[${st.gitBranch}]` : ''
               const tool = st.currentTool ? `running ${st.currentTool}` : st.state
               const ctx =
-                st.contextPercent !== null
-                  ? `ctx: ${st.contextPercent}% (${Math.round((st.contextTokens ?? 0) / 1000)}k/${Math.round((st.contextLimit ?? 0) / 1000)}k)`
+                st.contextTokens !== null
+                  ? `ctx: ${Math.round((st.contextTokens ?? 0) / 1000)}k tokens`
                   : ''
               const msgs = st.messageCount ? `${st.messageCount} msgs` : ''
               console.log(`  ${stateIcon} ${s.name}${self} ${branch}`)
