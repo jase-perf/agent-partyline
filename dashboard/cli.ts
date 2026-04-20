@@ -42,6 +42,8 @@ function formatMessage(envelope: Envelope): string {
     status: '\x1b[36m',
     heartbeat: '\x1b[90m',
     announce: '\x1b[35m',
+    'permission-request': '\x1b[33m',
+    'permission-response': '\x1b[32m',
   }[envelope.type] ?? '\x1b[37m'
   const reset = '\x1b[0m'
 
