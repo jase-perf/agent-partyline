@@ -1869,3 +1869,54 @@ section[data-view='switchboard'] .switchboard-wrap {
   cursor: pointer;
   line-height: 1;
 }
+
+.login-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: #0d1117;
+}
+.login-card {
+  background: #1f2937;
+  padding: 24px 32px;
+  border-radius: 8px;
+  min-width: 320px;
+  color: #e2e8f0;
+}
+.login-card h1 {
+  margin: 0 0 16px;
+  text-align: center;
+}
+.login-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.login-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.login-card input {
+  padding: 8px;
+  border: 1px solid #374151;
+  background: #0d1117;
+  color: #e2e8f0;
+  border-radius: 4px;
+}
+.login-card button {
+  padding: 8px;
+  background: #3fb950;
+  color: #0d1117;
+  border: none;
+  border-radius: 4px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.login-error {
+  color: #f85149;
+  font-size: 12px;
+  margin: 0;
+}

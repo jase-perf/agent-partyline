@@ -37,6 +37,26 @@ import { recentEvents } from '../src/storage/queries.js'
 import { buildTranscript, filterAfterUuid } from '../src/transcript.js'
 import { pruneOldEvents } from '../src/storage/retention.js'
 import { rollupDailyMetrics, hourlyToolCalls } from '../src/storage/metrics.js'
+import {
+  verifyPassword,
+  mintCookie,
+  verifyCookie,
+  revokeCookie,
+  parseCookieHeader,
+  cookieHeaderForSet,
+  cookieHeaderForClear,
+  isAuthDisabled,
+  pruneExpiredCookies,
+} from '../src/server/auth.js'
+import {
+  handleCcplRegister,
+  handleCcplGetSession,
+  handleCcplRotate,
+  handleCcplForget,
+  handleCcplArchive,
+  handleCcplList,
+  handleCcplCleanup,
+} from '../src/server/ccpl-api.js'
 
 // --- Args ---
 
@@ -195,6 +215,33 @@ function loadTls(): { cert: string; key: string } | undefined {
 }
 const tls = loadTls()
 
+// --- Auth helpers ---
+
+function isAuthed(req: Request): boolean {
+  if (isAuthDisabled()) return true
+  const cookie = parseCookieHeader(req.headers.get('cookie'))
+  return verifyCookie(db, cookie)
+}
+
+function requireAuth(req: Request): Response | null {
+  if (isAuthed(req)) return null
+  const accept = req.headers.get('accept') ?? ''
+  if (accept.includes('text/html')) {
+    const next = new URL(req.url).pathname
+    return new Response(null, {
+      status: 302,
+      headers: { location: `/login?next=${encodeURIComponent(next)}` },
+    })
+  }
+  return new Response(JSON.stringify({ error: 'unauthorized' }), {
+    status: 401,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+// Periodic cleanup of expired dashboard cookies.
+setInterval(() => pruneExpiredCookies(db), 60 * 60 * 1000).unref()
+
 const server = Bun.serve({
   port: PORT,
   ...(tls ? { tls } : {}),
@@ -206,6 +253,102 @@ const server = Bun.serve({
       if (server.upgrade(req)) return undefined
       return new Response('WebSocket upgrade failed', { status: 400 })
     }
+
+    // --- Auth routes (unauthenticated) ---
+
+    if (url.pathname === '/login' && req.method === 'POST') {
+      return (async () => {
+        const body = (await req.json().catch(() => ({}))) as { password?: string }
+        if (!verifyPassword(body.password || '')) {
+          return new Response(JSON.stringify({ error: 'invalid_password' }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        const cookie = mintCookie(db)
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            'Set-Cookie': cookieHeaderForSet(cookie),
+          },
+        })
+      })()
+    }
+
+    if (url.pathname === '/login' && req.method === 'GET') {
+      return new Response(Bun.file(resolve(__dirname, 'login.html')), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      })
+    }
+
+    if (url.pathname === '/login.js') {
+      return new Response(Bun.file(resolve(__dirname, 'login.js')), {
+        headers: { 'Content-Type': 'application/javascript' },
+      })
+    }
+
+    if (url.pathname === '/logout' && req.method === 'POST') {
+      const c = parseCookieHeader(req.headers.get('cookie'))
+      if (c) revokeCookie(db, c)
+      return new Response(null, {
+        status: 204,
+        headers: { 'Set-Cookie': cookieHeaderForClear() },
+      })
+    }
+
+    // --- ccpl HTTP API ---
+    // Register is unauthenticated. Per-session endpoints use X-Party-Line-Token.
+    // List/cleanup require dashboard cookie.
+
+    if (url.pathname === '/ccpl/register' && req.method === 'POST') {
+      return handleCcplRegister(req, db)
+    }
+    if (url.pathname === '/ccpl/archive' && req.method === 'POST') {
+      return handleCcplArchive(req, db)
+    }
+    if (url.pathname === '/ccpl/cleanup' && req.method === 'POST') {
+      const unauth = requireAuth(req)
+      if (unauth) return unauth
+      return handleCcplCleanup(req, db)
+    }
+    if (url.pathname === '/ccpl/sessions' && req.method === 'GET') {
+      const unauth = requireAuth(req)
+      if (unauth) return unauth
+      return handleCcplList(req, db)
+    }
+
+    const rotateMatch = url.pathname.match(/^\/ccpl\/session\/([^/]+)\/rotate$/)
+    if (rotateMatch && req.method === 'POST') {
+      return handleCcplRotate(req, db, decodeURIComponent(rotateMatch[1]!))
+    }
+    const sessionMatch = url.pathname.match(/^\/ccpl\/session\/([^/]+)$/)
+    if (sessionMatch) {
+      if (req.method === 'GET')
+        return handleCcplGetSession(req, db, decodeURIComponent(sessionMatch[1]!))
+      if (req.method === 'DELETE')
+        return handleCcplForget(req, db, decodeURIComponent(sessionMatch[1]!))
+    }
+
+    // --- Unauth passes: static login assets already handled above; /ingest has its own auth ---
+    // Everything below this marker requires dashboard cookie auth.
+
+    if (url.pathname === '/ingest') {
+      // /ingest uses its own bearer-token shared-secret auth.
+      return handleIngest(req, {
+        db,
+        token,
+        onEvent: (ev) => {
+          aggregator.ingest(ev)
+          // Broadcast the raw hook event so the History view can live-append.
+          const json = JSON.stringify({ type: 'hook-event', data: ev })
+          for (const ws of wsClients) ws.send(json)
+        },
+      })
+    }
+
+    const authFail = requireAuth(req)
+    if (authFail) return authFail
 
     // REST API: list sessions
     if (url.pathname === '/api/sessions') {
@@ -304,20 +447,6 @@ const server = Bun.serve({
         )
         return Response.json({ ok: true, id: envelope.id })
       })()
-    }
-
-    // REST API: ingest hook events
-    if (url.pathname === '/ingest') {
-      return handleIngest(req, {
-        db,
-        token,
-        onEvent: (ev) => {
-          aggregator.ingest(ev)
-          // Broadcast the raw hook event so the History view can live-append.
-          const json = JSON.stringify({ type: 'hook-event', data: ev })
-          for (const ws of wsClients) ws.send(json)
-        },
-      })
     }
 
     // REST API: single session + subagents
