@@ -6,3 +6,4 @@ bun.lock
 *.db-shm
 .playwright-mcp/
 .superpowers/
+.worktrees/
