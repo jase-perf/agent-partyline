@@ -132,5 +132,17 @@ export function createNotifications(deps) {
         activeNotifications.delete(frame.session)
       }
     },
+    onNotificationDismiss(frame) {
+      if (!frame || !frame.session) return
+      const active = activeNotifications.get(frame.session)
+      if (active) {
+        active.close()
+        activeNotifications.delete(frame.session)
+      }
+    },
+    dispatchSessionViewed(sessionName) {
+      if (!sessionName) return
+      deps.sendWsFrame({ type: 'session-viewed', session: sessionName })
+    },
   }
 }

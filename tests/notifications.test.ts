@@ -54,8 +54,8 @@ describe('createNotifications — trigger A (working→idle)', async () => {
     await notif.onSessionUpdate({ session_id: 'research', name: 'research', state: 'idle' })
 
     expect(fired).toHaveLength(1)
-    expect(fired[0].title).toContain('research')
-    expect(fired[0].options.tag).toBe('research')
+    expect(fired[0]!.title).toContain('research')
+    expect(fired[0]!.options.tag).toBe('research')
   })
 
   test('does not fire on idle→idle', async () => {
@@ -121,9 +121,9 @@ describe('createNotifications — trigger B (party-line message)', async () => {
     notif.setEnabled('research', true)
     notif.onPartyLineMessage(envelope())
     expect(fired).toHaveLength(1)
-    expect(fired[0].title).toBe('research')
-    expect(fired[0].options.body).toContain('discord')
-    expect(fired[0].options.body).toContain('hello')
+    expect(fired[0]!.title).toBe('research')
+    expect(fired[0]!.options.body).toContain('discord')
+    expect(fired[0]!.options.body).toContain('hello')
   })
 
   test('fires on broadcast (to=all)', async () => {
@@ -163,7 +163,7 @@ describe('createNotifications — trigger B (party-line message)', async () => {
     const notif = createNotifications(ctx)
     notif.setEnabled('research', true)
     notif.onPartyLineMessage(envelope({ body: longBody }))
-    expect(fired[0].options.body.length).toBeLessThanOrEqual(140) // "from: " + 120 + ellipsis
+    expect(fired[0]!.options.body!.length).toBeLessThanOrEqual(140) // "from: " + 120 + ellipsis
   })
 })
 
@@ -186,10 +186,10 @@ describe('createNotifications — trigger C (permission-request)', async () => {
     notif.setEnabled('research', true)
     notif.onPermissionRequest(permFrame())
     expect(fired).toHaveLength(1)
-    expect(fired[0].title).toContain('Permission needed')
-    expect(fired[0].title).toContain('Bash')
-    expect(fired[0].options.body).toContain('Run tests')
-    expect(fired[0].options.tag).toBe('research')
+    expect(fired[0]!.title).toContain('Permission needed')
+    expect(fired[0]!.title).toContain('Bash')
+    expect(fired[0]!.options.body).toContain('Run tests')
+    expect(fired[0]!.options.tag).toBe('research')
   })
 
   test('does not fire when session toggle is off', async () => {
@@ -278,10 +278,38 @@ describe('createNotifications — click handler', async () => {
     await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'idle' })
 
     expect(instances).toHaveLength(1)
-    const n = instances[0]
+    const n = instances[0]!
     n.onclick?.(new Event('click'))
 
     expect(win.focus).toHaveBeenCalled()
     expect(navigateMock).toHaveBeenCalledWith('/#/session/research')
+  })
+})
+
+describe('createNotifications — auto-dismiss', async () => {
+  test("onNotificationDismiss closes the session's active notification", async () => {
+    const { ctx, closed } = mockDeps()
+    ctx.doc.hidden = true
+    const notif = createNotifications(ctx)
+    notif.setEnabled('research', true)
+    await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'working' })
+    await notif.onSessionUpdate({ session_id: 'r', name: 'research', state: 'idle' })
+
+    notif.onNotificationDismiss({ session: 'research' })
+    expect(closed).toContain('research')
+  })
+
+  test('onNotificationDismiss for unknown session is a no-op', async () => {
+    const { ctx, closed } = mockDeps()
+    const notif = createNotifications(ctx)
+    notif.onNotificationDismiss({ session: 'nobody' })
+    expect(closed).toEqual([])
+  })
+
+  test('dispatchSessionViewed sends session-viewed WS frame', async () => {
+    const { ctx, wsSends } = mockDeps()
+    const notif = createNotifications(ctx)
+    notif.dispatchSessionViewed('research')
+    expect(wsSends).toEqual([{ type: 'session-viewed', session: 'research' }])
   })
 })
