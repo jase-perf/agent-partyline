@@ -57,6 +57,27 @@ export interface BuildTranscriptOptions {
   envelopes?: PartyLineEnvelope[]
 }
 
+/**
+ * Filter a transcript to only entries that come *after* the entry with the given uuid.
+ *
+ * Uses positional index — the uuid is looked up in the entries array; everything
+ * after that index is returned. If uuid is not found (e.g., stale after compaction
+ * rewrote the file), the entire list is returned as a graceful fallback so the
+ * client gets a full re-fetch rather than an empty screen.
+ *
+ * Party-line envelope entries (keyed by envelope_id stored in uuid) are included
+ * in the same positional slice because buildTranscript interleaves them by ts
+ * before returning.
+ */
+export function filterAfterUuid(entries: TranscriptEntry[], afterUuid: string): TranscriptEntry[] {
+  const idx = entries.findIndex((e) => e.uuid === afterUuid)
+  if (idx === -1) {
+    // Unknown uuid — graceful fallback: return full list
+    return entries
+  }
+  return entries.slice(idx + 1)
+}
+
 // ---------------------------------------------------------------------------
 // Internal types for JSONL records
 // ---------------------------------------------------------------------------
