@@ -57,6 +57,7 @@ import {
   handleCcplList,
   handleCcplCleanup,
 } from '../src/server/ccpl-api.js'
+import { createSwitchboard } from '../src/server/switchboard.js'
 
 // --- Args ---
 
@@ -110,6 +111,9 @@ const db = openDb(DB_PATH)
 const token = loadOrCreateToken(TOKEN_PATH)
 const machineId = getMachineId(MACHINE_ID_PATH)
 const aggregator = new Aggregator(db)
+
+// --- Hub-and-spoke switchboard (v2 transport) ---
+const switchboard = createSwitchboard(db)
 
 aggregator.onUpdate((session) => {
   const json = JSON.stringify({ type: 'session-update', data: session })
@@ -248,9 +252,19 @@ const server = Bun.serve({
   fetch(req, server) {
     const url = new URL(req.url)
 
-    // WebSocket upgrade
+    // WebSocket upgrades
+    if (url.pathname === '/ws/session') {
+      if (server.upgrade(req, { data: { kind: 'session' } })) return undefined
+      return new Response('WebSocket upgrade failed', { status: 400 })
+    }
+    if (url.pathname === '/ws/observer') {
+      const unauth = requireAuth(req)
+      if (unauth) return new Response('unauthorized', { status: 401 })
+      if (server.upgrade(req, { data: { kind: 'observer' } })) return undefined
+      return new Response('WebSocket upgrade failed', { status: 400 })
+    }
     if (url.pathname === '/ws') {
-      if (server.upgrade(req)) return undefined
+      if (server.upgrade(req, { data: { kind: 'legacy' } })) return undefined
       return new Response('WebSocket upgrade failed', { status: 400 })
     }
 
@@ -581,9 +595,22 @@ const server = Bun.serve({
     })
   },
   websocket: {
+    // Type hint so ws.data carries our per-connection kind tag.
+    // See WebSocketHandler.data in bun-types for why this pattern exists.
+    data: {} as { kind?: 'session' | 'observer' | 'legacy' } | undefined,
+    idleTimeout: 30, // seconds; Bun kicks silent connections after this
     open(ws) {
+      const kind = ws.data?.kind
+      if (kind === 'session') {
+        // Wait for hello frame — don't do anything yet.
+        return
+      }
+      if (kind === 'observer') {
+        switchboard.handleObserverOpen(ws as never)
+        return
+      }
+      // Legacy (/ws) path: existing behavior.
       wsClients.add(ws)
-      // Send current state
       ws.send(JSON.stringify({ type: 'sessions', data: monitor.getSessions() }))
       const quota = getQuota()
       if (quota) ws.send(JSON.stringify({ type: 'quota', data: quota }))
@@ -593,10 +620,43 @@ const server = Bun.serve({
         ws.send(JSON.stringify({ type: 'message', data: msg }))
       }
     },
-    message(ws, data) {
-      // Handle send commands from the browser
+    message(ws, raw) {
+      const kind = ws.data?.kind
+      let frame: { type?: string; [k: string]: unknown }
       try {
-        const parsed = JSON.parse(String(data)) as {
+        frame = JSON.parse(String(raw)) as { type?: string; [k: string]: unknown }
+      } catch {
+        return
+      }
+      if (kind === 'session') {
+        if (frame.type === 'hello') {
+          const res = switchboard.handleSessionHello(ws as never, frame as never)
+          if (!res.ok) {
+            try {
+              ws.send(JSON.stringify({ type: 'error', code: res.error }))
+            } catch {
+              /* ignore */
+            }
+            ws.close(res.code ?? 4401, res.error ?? 'error')
+            return
+          }
+          try {
+            ws.send(JSON.stringify({ type: 'accepted', server_time: Date.now() }))
+          } catch {
+            /* ignore */
+          }
+          return
+        }
+        switchboard.handleSessionFrame(ws as never, frame)
+        return
+      }
+      if (kind === 'observer') {
+        switchboard.handleObserverFrame(ws as never, frame)
+        return
+      }
+      // Legacy (/ws) behavior — existing logic below
+      try {
+        const parsed = frame as {
           action?: string
           type?: string
           to?: string
@@ -620,10 +680,19 @@ const server = Bun.serve({
           void monitor.respond(parsed.to, parsed.callback_id, parsed.message)
         }
       } catch {
-        // Ignore malformed messages
+        /* ignore */
       }
     },
     close(ws) {
+      const kind = ws.data?.kind
+      if (kind === 'session') {
+        switchboard.handleSessionClose(ws as never)
+        return
+      }
+      if (kind === 'observer') {
+        switchboard.handleObserverClose(ws as never)
+        return
+      }
       wsClients.delete(ws)
     },
   },
