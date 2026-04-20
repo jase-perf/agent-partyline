@@ -42,7 +42,7 @@ describe('storage', () => {
     const db = openDb(TEST_PATH)
     const row = db.query<{ user_version: number }, []>('PRAGMA user_version').get()
     expect(row?.user_version).toBe(SCHEMA_VERSION)
-    expect(row?.user_version).toBe(3)
+    expect(row?.user_version).toBe(4)
     db.close()
   })
 
@@ -230,6 +230,31 @@ describe('storage', () => {
     const row = sessionState(db, 's4')
     expect(row?.source).toBe('gemini-cli')
     db.close()
+  })
+
+  test('upgrade v3 → v4 creates ccpl_sessions, ccpl_archives, messages, dashboard_sessions', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'partylinedb-'))
+    const dbPath = join(tmp, 'test.db')
+    try {
+      const pre = new Database(dbPath)
+      // Simulate a v3 DB by stamping user_version = 3 with some pre-existing tables.
+      pre.exec('CREATE TABLE events (id INTEGER PRIMARY KEY, hook_event TEXT, ts INTEGER)')
+      pre.exec('PRAGMA user_version = 3')
+      pre.close()
+
+      const db = openDb(dbPath)
+      const tables = db
+        .query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .all() as { name: string }[]
+      const names = tables.map((t) => t.name)
+      expect(names).toContain('ccpl_sessions')
+      expect(names).toContain('ccpl_archives')
+      expect(names).toContain('messages')
+      expect(names).toContain('dashboard_sessions')
+      db.close()
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
   })
 })
 

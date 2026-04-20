@@ -81,3 +81,52 @@ CREATE TABLE IF NOT EXISTS metrics_daily (
   PRIMARY KEY (day, session_id)
 );
 CREATE INDEX IF NOT EXISTS idx_metrics_day ON metrics_daily(day);
+
+CREATE TABLE IF NOT EXISTS ccpl_sessions (
+  name TEXT PRIMARY KEY,
+  token TEXT NOT NULL UNIQUE,
+  cwd TEXT NOT NULL,
+  cc_session_uuid TEXT,
+  pid INTEGER,
+  machine_id TEXT,
+  online INTEGER NOT NULL DEFAULT 0,
+  revision INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  last_active_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ccpl_sessions_token ON ccpl_sessions(token);
+CREATE INDEX IF NOT EXISTS idx_ccpl_sessions_last_active ON ccpl_sessions(last_active_at);
+
+CREATE TABLE IF NOT EXISTS ccpl_archives (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  old_uuid TEXT NOT NULL,
+  archived_at INTEGER NOT NULL,
+  reason TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ccpl_archives_name ON ccpl_archives(name);
+CREATE INDEX IF NOT EXISTS idx_ccpl_archives_uuid ON ccpl_archives(old_uuid);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY,
+  ts INTEGER NOT NULL,
+  from_name TEXT NOT NULL,
+  to_name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  body TEXT,
+  callback_id TEXT,
+  response_to TEXT,
+  cc_session_uuid TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts);
+CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_name, ts);
+CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_name, ts);
+CREATE INDEX IF NOT EXISTS idx_messages_uuid ON messages(cc_session_uuid, ts);
+
+CREATE TABLE IF NOT EXISTS dashboard_sessions (
+  cookie TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL,
+  last_seen INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dashboard_sessions_expires ON dashboard_sessions(expires_at);
