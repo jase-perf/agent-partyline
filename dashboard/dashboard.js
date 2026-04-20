@@ -2010,7 +2010,12 @@ function updateBanner() {
     return
   }
   banner.hidden = false
-  if (state === 'denied') {
+  const insecure = !window.isSecureContext
+  if (insecure) {
+    text.textContent =
+      '🔔 Notifications require HTTPS or localhost. Reach the dashboard at https:// (or via a tunnel) to enable.'
+    btn.hidden = true
+  } else if (state === 'denied') {
     text.textContent = '🔔 Notifications blocked. Re-enable in browser settings.'
     btn.hidden = true
   } else {
