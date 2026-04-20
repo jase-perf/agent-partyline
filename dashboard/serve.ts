@@ -16,6 +16,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join, dirname, resolve } from 'path'
 import { fileURLToPath } from 'url'
+import { randomBytes } from 'node:crypto'
 import { PartyLineMonitor } from './monitor.js'
 import { startQuotaPoller, stopQuotaPoller, getQuota } from './quota.js'
 import {
@@ -460,11 +461,17 @@ const server = Bun.serve({
         if (!body.to || !body.message) {
           return Response.json({ error: '"to" and "message" required' }, { status: 400 })
         }
-        const envelope = await monitor.send(
-          body.to,
-          body.message,
-          (body.type as 'message') ?? 'message',
-        )
+        const envelope = {
+          id: randomBytes(8).toString('hex'),
+          ts: Date.now(),
+          from: 'dashboard',
+          to: body.to,
+          envelope_type: (body.type as string) ?? 'message',
+          body: body.message,
+          callback_id: null,
+          response_to: null,
+        }
+        switchboard.routeEnvelope(envelope)
         return Response.json({ ok: true, id: envelope.id })
       })()
     }
