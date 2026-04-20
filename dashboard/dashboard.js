@@ -2295,4 +2295,53 @@ if (navigator.permissions && navigator.permissions.query) {
     })
 }
 
+// --- PWA install prompt ---
+
+let deferredInstallPrompt = null
+const installBtn = document.getElementById('pwa-install-btn')
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  // Chrome fires this when criteria are met; we stash it and show our own button.
+  e.preventDefault()
+  deferredInstallPrompt = e
+  if (installBtn) installBtn.hidden = false
+})
+
+installBtn?.addEventListener('click', async () => {
+  if (!deferredInstallPrompt) return
+  deferredInstallPrompt.prompt()
+  const { outcome } = await deferredInstallPrompt.userChoice
+  console.log('[pwa] install outcome:', outcome)
+  deferredInstallPrompt = null
+  installBtn.hidden = true
+})
+
+window.addEventListener('appinstalled', () => {
+  console.log('[pwa] installed')
+  if (installBtn) installBtn.hidden = true
+})
+
+// iOS Safari: no beforeinstallprompt. Detect + show a one-time hint.
+function maybeShowIosInstallHint() {
+  const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent)
+  const inStandalone = 'standalone' in navigator && navigator['standalone'] === true
+  const dismissed = localStorage.getItem('pl-install-hint-dismissed') === '1'
+  if (!isIos || inStandalone || dismissed) return
+
+  const hint = document.createElement('div')
+  hint.className = 'ios-install-hint'
+  hint.textContent = 'Tap Share → Add to Home Screen to install Party Line.'
+  const close = document.createElement('button')
+  close.className = 'ios-install-hint-close'
+  close.textContent = '×'
+  close.addEventListener('click', () => {
+    localStorage.setItem('pl-install-hint-dismissed', '1')
+    hint.remove()
+  })
+  hint.appendChild(close)
+  document.body.appendChild(hint)
+}
+
+maybeShowIosInstallHint()
+
 connect()
