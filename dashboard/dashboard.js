@@ -232,7 +232,13 @@ function connect() {
     else if (data.type === 'overrides') { contextOverrides = data.data; updateSessions(lastSessions); }
     else if (data.type === 'session-update') { handleSessionUpdate(data.data); bumpUnread(data.data.name); }
     else if (data.type === 'jsonl') { handleJsonlEvent(data.data); bumpUnread(resolveNameFromJsonlPath(data.data.file_path) || data.data.session_id); }
-    else if (data.type === 'hook-event') handleHookEvent(data.data);
+    else if (data.type === 'hook-event') {
+      handleHookEvent(data.data);
+      // Check if this is a SessionStart from compaction — if so, force a full
+      // transcript re-fetch for the currently-viewed session.
+      maybeHandleCompactForCurrentView(data.data);
+    }
+    else if (data.type === 'stream-reset') handleStreamReset(data.data);
     else if (data.type === 'cross-call') handleCrossCall(data.data);
   };
 }
@@ -772,6 +778,9 @@ function handleSessionUpdate(session) {
         renderAgentTree();
       })
       .catch(() => {});
+    // Also refresh the transcript incrementally — the session update often
+    // accompanies new JSONL content (tool calls, responses, etc.).
+    renderStream({ incremental: true });
   }
 }
 
@@ -782,7 +791,50 @@ function handleJsonlEvent(update) {
     || resolveNameFromJsonlPath(update.file_path) === selectedSessionId;
   const agentMatches = selectedAgentId && update.session_id === selectedAgentId;
   if (!parentMatches && !agentMatches) return;
-  renderStream();
+  // Use incremental mode: only fetch entries appended since the last render.
+  // renderStream will fall back to a full fetch if lastRenderedUuid is null
+  // (first load) or if the server can't find the uuid (post-compaction).
+  renderStream({ incremental: true });
+}
+
+/**
+ * Handle a stream-reset notification — fired by the JSONL observer when a
+ * session transcript file shrinks (compaction / file replacement).
+ * If the affected file belongs to the currently-viewed session, force a full
+ * transcript re-fetch so the client doesn't display stale or gap content.
+ */
+function handleStreamReset(data) {
+  if (currentView !== 'session-detail' || !selectedSessionId) return;
+  if (!data || !data.file_path) return;
+  const sessionName = resolveNameFromJsonlPath(data.file_path);
+  const sessionId = (data.file_path.match(/\/([0-9a-f-]+)\.jsonl$/) || [])[1];
+  if (sessionName !== selectedSessionId && sessionId !== selectedSessionId) return;
+  renderStream({ force: true });
+}
+
+/**
+ * Check if a SessionStart hook event with source='compact' matches the
+ * currently-viewed session (by UUID or name). If so, force a full re-fetch
+ * to recover after the JSONL was rewritten by compaction.
+ *
+ * Called from the hook-event WebSocket branch. Exported as a module-level
+ * function so it can be unit-tested (or called directly from tests).
+ */
+function maybeHandleCompactForCurrentView(evPayload) {
+  if (!evPayload) return;
+  if (evPayload.hook_event !== 'SessionStart') return;
+  const payload = evPayload.payload;
+  if (!payload || payload.source !== 'compact') return;
+  if (currentView !== 'session-detail' || !selectedSessionId) return;
+
+  // Match by session UUID or session name (whichever the event carries).
+  const matchesId = evPayload.session_id && evPayload.session_id === selectedSessionId;
+  const matchesName = evPayload.session_name && evPayload.session_name === selectedSessionId;
+  if (!matchesId && !matchesName) return;
+
+  // Compaction rewrites the JSONL — our lastRenderedUuid is now stale.
+  // Force a complete re-fetch so the stream reflects the new file.
+  renderStream({ force: true });
 }
 
 // Append a single party-line envelope directly to the stream without a
@@ -1118,6 +1170,10 @@ function buildAgentLi(sa) {
 let renderedEntryKeys = new Set();
 let renderedStreamKey = null;  // sessionId + '|' + (agentId || '') — resets on switch
 let missedWhileScrolledUp = 0;  // count of entries appended while user was scrolled up
+// lastRenderedUuid: the uuid of the most recently appended transcript entry.
+// Used by incremental renderStream calls to fetch only new entries via ?after_uuid=.
+// Reset to null whenever the stream is fully re-rendered (new session, force fetch).
+let lastRenderedUuid = null;
 
 function isNearBottom(el) {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
@@ -1160,12 +1216,16 @@ async function renderStream(opts) {
   const streamKey = selectedSessionId + '|' + (selectedAgentId || '');
   const isNewStream = streamKey !== renderedStreamKey;
   const force = opts && opts.force;
+  // Incremental mode: only fetch entries after the last rendered uuid.
+  // Disabled when: no prior uuid, new stream, or force refetch.
+  const incremental = (opts && opts.incremental) && !isNewStream && !force && lastRenderedUuid;
 
   if (isNewStream || force) {
     // Full rebuild path — show loading + replace everything.
     root.replaceChildren();
     renderedEntryKeys = new Set();
     renderedStreamKey = streamKey;
+    lastRenderedUuid = null;  // reset incremental cursor
     const loading = document.createElement('p');
     loading.style.color = 'var(--text-dim)';
     loading.textContent = 'Loading...';
@@ -1174,9 +1234,18 @@ async function renderStream(opts) {
 
   const wasNearBottom = !isNewStream && isNearBottom(root);
 
-  const qs = 'session_id=' + encodeURIComponent(selectedSessionId)
+  // Build query string. When doing an incremental update, pass after_uuid so
+  // the server only returns entries appended since the last render — this avoids
+  // re-reading and re-parsing the entire JSONL for every heartbeat update.
+  // The server falls back to the full transcript if after_uuid is not found
+  // (e.g., after compaction), so clients don't need special stale-uuid logic.
+  let qs = 'session_id=' + encodeURIComponent(selectedSessionId)
     + (selectedAgentId ? '&agent_id=' + encodeURIComponent(selectedAgentId) : '')
     + '&limit=300';
+  if (incremental && lastRenderedUuid) {
+    qs += '&after_uuid=' + encodeURIComponent(lastRenderedUuid);
+  }
+
   let entries;
   try {
     const r = await fetch('/api/transcript?' + qs);
@@ -1192,12 +1261,13 @@ async function renderStream(opts) {
     return;
   }
 
-  // Make sure this response is still relevant.
+  // Make sure this response is still relevant (user may have navigated away).
   if (streamKey !== renderedStreamKey) return;
 
   if (isNewStream || force) {
     root.replaceChildren();
     renderedEntryKeys = new Set();
+    lastRenderedUuid = null;
   }
 
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -1211,6 +1281,8 @@ async function renderStream(opts) {
   }
 
   // Append only missing entries (keyed by uuid, falling back to ts+type).
+  // Track the uuid of the last entry appended so future incremental calls
+  // can pass ?after_uuid= to skip already-rendered content.
   let appendedCount = 0;
   for (const e of entries) {
     const key = e.uuid || (e.ts + '|' + e.type + '|' + (e.envelope_id || ''));
@@ -1218,6 +1290,8 @@ async function renderStream(opts) {
     renderedEntryKeys.add(key);
     root.appendChild(renderEntry(e));
     appendedCount++;
+    // Update the incremental cursor to the newest entry's uuid.
+    if (e.uuid) lastRenderedUuid = e.uuid;
   }
 
   // Scroll to bottom only if it's a fresh stream OR the user was already near
