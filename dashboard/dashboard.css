@@ -1800,6 +1800,19 @@ section[data-view='switchboard'] .switchboard-wrap {
   color: #f85149;
 }
 
+.subview[data-subview='bus'] {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+}
+.bus-feed-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 .bus-filters {
   display: flex;
   gap: 12px;
@@ -1807,6 +1820,7 @@ section[data-view='switchboard'] .switchboard-wrap {
   font-size: 12px;
   color: var(--text-dim);
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 .bus-filters label {
   display: inline-flex;
