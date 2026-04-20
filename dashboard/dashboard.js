@@ -915,11 +915,6 @@ function handleSessionUpdate(session) {
     sessionMachines[session.name] = session.machine_id
   }
 
-  // Update detail view header if we're viewing this session
-  if (currentView === 'session-detail' && selectedSessionId === session.session_id) {
-    updateDetailHeader(session)
-  }
-
   // Live-patch the session detail view when the viewed session receives an update
   if (currentView === 'session-detail' && session && session.name === selectedSessionId) {
     renderDetailHeader(session)
