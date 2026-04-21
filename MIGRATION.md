@@ -86,14 +86,45 @@ Run 'ccpl discord' to launch.
 
 The token is required for the MCP plugin to connect to the switchboard — keep it secret.
 
-### 5. Reinstall the `ccpl` binary symlink (if applicable)
+### 5. Check how `ccpl` resolves on your shell
 
-The old `bin/ccpl` was a bash script. It's now a Bun TypeScript CLI (`bin/ccpl.ts` with a shim at `bin/ccpl`). If you had `~/.local/bin/ccpl` pointing at the old file, the symlink still works — point it at the same path:
+Your current setup:
+
+- **`~/.bashrc:140`** has `alias ccpl='/home/claude/projects/claude-party-line/bin/ccpl'` — this **already points at the new code** (the Bun shim that loads `ccpl.ts`). Interactive shells get the new CLI automatically.
+- **Plugin cache** at `/home/claude/.claude/plugins/cache/agent-partyline/party-line/0.1.0/bin/ccpl` is the **old bash script**. PATH-based resolution (non-interactive shells, scripts invoking `ccpl` via `/usr/bin/env`, cron jobs) will hit this stale copy and skip `PARTY_LINE_TOKEN`.
+
+Verify the alias wins in your interactive shell:
 
 ```bash
-ln -sfn /home/claude/projects/claude-party-line/bin/ccpl ~/.local/bin/ccpl
-ccpl --help
+type ccpl                  # should print "ccpl is aliased to..."
+ccpl --help                # should print the new subcommand usage (new/list/forget/rotate)
 ```
+
+If `type ccpl` points at the plugin cache instead, your shell didn't source `.bashrc` — restart it or `source ~/.bashrc`.
+
+**For non-interactive contexts** (scripts, tmux startup, cron), you have three options:
+
+1. **Drop a symlink in `~/.local/bin`** (takes PATH precedence over the plugin cache):
+
+   ```bash
+   mkdir -p ~/.local/bin
+   ln -sfn /home/claude/projects/claude-party-line/bin/ccpl ~/.local/bin/ccpl
+   hash -r
+   which ccpl   # should print ~/.local/bin/ccpl
+   ```
+
+2. **Overwrite the plugin cache copy** (quick + dirty; gets overwritten next time the plugin updates):
+
+   ```bash
+   cp /home/claude/projects/claude-party-line/bin/ccpl \
+      /home/claude/.claude/plugins/cache/agent-partyline/party-line/0.1.0/bin/ccpl
+   cp /home/claude/projects/claude-party-line/bin/ccpl.ts \
+      /home/claude/.claude/plugins/cache/agent-partyline/party-line/0.1.0/bin/ccpl.ts
+   ```
+
+3. **Republish the plugin** to the marketplace once you're happy with Phase C stability (Argonaut-Creations/agent-partyline repo).
+
+Recommended for tonight: option 1 (symlink). It's the least invasive.
 
 ### 6. Launch Claude Code via ccpl
 
