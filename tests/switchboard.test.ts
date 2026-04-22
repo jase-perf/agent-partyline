@@ -406,6 +406,75 @@ describe('switchboard', () => {
     cleanup()
   })
 
+  test('hello does NOT overwrite stored cc_session_uuid (anti-pingpong)', () => {
+    // Scenario: plugin's ~/.claude/sessions/<pid>.json is stale after /clear,
+    // so it reconnects advertising the OLD uuid even though reconcile has
+    // already adopted the NEW uuid from a hook event. Hello must ignore
+    // frame.cc_session_uuid whenever we already have a stored value.
+    const row = registerSession(db, 'foo', '/tmp')
+    const sb = createSwitchboard(db)
+
+    // Simulate: first connect establishes 'uuid-A'.
+    sb.handleSessionHello(fakeWs('session'), {
+      token: row.token,
+      name: 'foo',
+      cc_session_uuid: 'uuid-A',
+      pid: 1,
+      machine_id: null,
+    })
+    // Hook stream reconciles to 'uuid-B' (user ran /clear; hook event arrived).
+    sb.reconcileCcSessionUuid('foo', 'uuid-B', 'hook_drift')
+
+    // Plugin reconnects (e.g. transient network blip). pid file still says
+    // 'uuid-A' — stale. This must NOT archive 'uuid-B' nor revert to 'uuid-A'.
+    const obs = fakeWs('observer')
+    sb.handleObserverOpen(obs as never)
+    obs.sent.length = 0
+
+    sb.handleSessionHello(fakeWs('session'), {
+      token: row.token,
+      name: 'foo',
+      cc_session_uuid: 'uuid-A', // stale!
+      pid: 1,
+      machine_id: null,
+    })
+
+    const archives = db
+      .query(`SELECT old_uuid, reason FROM ccpl_archives WHERE name = ? ORDER BY id`)
+      .all('foo') as Array<{ old_uuid: string; reason: string }>
+    // Only the single hook_drift archive from the reconcile call — no new
+    // reconnect_different_uuid entry.
+    expect(archives.length).toBe(1)
+    expect(archives[0]!.old_uuid).toBe('uuid-A')
+    expect(archives[0]!.reason).toBe('hook_drift')
+
+    const current = db
+      .query(`SELECT cc_session_uuid FROM ccpl_sessions WHERE name = ?`)
+      .get('foo') as { cc_session_uuid: string }
+    expect(current.cc_session_uuid).toBe('uuid-B')
+
+    cleanup()
+  })
+
+  test('hello adopts frame uuid on first connect when stored is null', () => {
+    // Fresh session row (stored cc_session_uuid is null). Hello must still
+    // bootstrap the uuid so the session isn't blank until the first hook.
+    const row = registerSession(db, 'foo', '/tmp')
+    const sb = createSwitchboard(db)
+    sb.handleSessionHello(fakeWs('session'), {
+      token: row.token,
+      name: 'foo',
+      cc_session_uuid: 'uuid-fresh',
+      pid: 1,
+      machine_id: null,
+    })
+    const current = db
+      .query(`SELECT cc_session_uuid FROM ccpl_sessions WHERE name = ?`)
+      .get('foo') as { cc_session_uuid: string }
+    expect(current.cc_session_uuid).toBe('uuid-fresh')
+    cleanup()
+  })
+
   test('uuid-rotate with mismatched old_uuid still archives current uuid', () => {
     const row = registerSession(db, 'foo', '/tmp')
     const sb = createSwitchboard(db)

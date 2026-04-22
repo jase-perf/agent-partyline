@@ -611,8 +611,16 @@ const server = Bun.serve({
       })
     }
 
-    const authFail = requireAuth(req)
-    if (authFail) return authFail
+    // Routes below run their own token-or-cookie auth via resolveUploader,
+    // so skip the blanket cookie gate for them. (Plugins + CLI call these
+    // with X-Party-Line-Token, not a dashboard cookie.)
+    const isSelfAuthedRoute =
+      (url.pathname === '/api/upload' && req.method === 'POST') ||
+      (url.pathname.startsWith('/api/attachment/') && req.method === 'GET')
+    if (!isSelfAuthedRoute) {
+      const authFail = requireAuth(req)
+      if (authFail) return authFail
+    }
 
     // Dashboard-cookie-authed session mutations: archive current UUID or
     // remove the session row outright. The actual logic lives in

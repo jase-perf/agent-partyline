@@ -203,16 +203,17 @@ export function createSwitchboard(db: Database): Switchboard {
         }
       }
 
-      // UUID drift: archive the prior UUID if it differs from the incoming hello.
-      if (
-        row.cc_session_uuid &&
-        frame.cc_session_uuid &&
-        row.cc_session_uuid !== frame.cc_session_uuid
-      ) {
-        archiveSession(db, row.name, row.cc_session_uuid, 'reconnect_different_uuid')
-      }
-
-      updateSessionOnConnect(db, row.name, frame.cc_session_uuid, frame.pid, frame.machine_id)
+      // UUID drift handling: the plugin's pid-file (~/.claude/sessions/<pid>.json)
+      // does not update on /clear or /resume, so frame.cc_session_uuid is
+      // frequently stale. Hook events carry the current session_id from Claude
+      // Code itself and are authoritative — reconcileCcSessionUuid is the only
+      // place we adopt new uuids. Here we treat the hello uuid as a fallback:
+      // accept it only when we have nothing stored yet (first connect) so the
+      // session isn't blank between launch and the first hook. Never overwrite
+      // a stored uuid with a hello uuid — that was the source of the hook vs
+      // hello ping-pong that spammed ccpl_archives.
+      const effectiveUuid = row.cc_session_uuid ?? frame.cc_session_uuid
+      updateSessionOnConnect(db, row.name, effectiveUuid, frame.pid, frame.machine_id)
       ws.data.name = row.name
       ws.data.token = row.token
       sessionsByName.set(row.name, ws)
