@@ -759,7 +759,59 @@ header h1 .logo {
   display: block;
 }
 
-/* Context-usage progress bar — thin; color shifts at 70% / 90%. */
+/* Reusable context progress bar with overlay text. Translucent fill keeps
+ * the foreground readable across all states. State classes (.ok/.warn/.crit)
+ * pick the fill color via a CSS var. Used in session cards, the detail
+ * header, and anywhere getEffectiveContextLimit drives a usage display. */
+.ctx-bar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 110px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  isolation: isolate;
+  font-size: 11px;
+  line-height: 1.3;
+  cursor: default;
+  vertical-align: middle;
+}
+.ctx-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--pct, 0%);
+  background: var(--ctx-color, var(--green));
+  opacity: 0.35;
+  pointer-events: none;
+  transition: width 0.25s ease-out;
+  z-index: 0;
+}
+.ctx-bar-text {
+  position: relative;
+  z-index: 1;
+  color: var(--text);
+  text-shadow: 0 0 2px var(--surface);
+  white-space: nowrap;
+}
+.ctx-bar.ok {
+  --ctx-color: var(--green);
+  border-color: rgba(63, 185, 80, 0.4);
+}
+.ctx-bar.warn {
+  --ctx-color: var(--yellow);
+  border-color: rgba(210, 153, 34, 0.5);
+}
+.ctx-bar.crit {
+  --ctx-color: var(--red);
+  border-color: rgba(248, 81, 73, 0.5);
+}
+
+/* Legacy thin context bar — kept for backwards compatibility, replaced by
+ * .ctx-bar above on the session card. */
 .card-ctx-bar {
   height: 2px;
   background: rgba(139, 148, 158, 0.15);
@@ -1798,33 +1850,56 @@ details.spawn-marker summary::-webkit-details-marker {
   align-items: center;
 }
 .quota-pip {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
   font-size: 10px;
   font-weight: 600;
-  padding: 2px 7px;
+  padding: 2px 8px;
+  min-width: 56px;
   border-radius: 10px;
   background: var(--surface);
   border: 1px solid var(--border);
-  color: var(--text-dim);
+  color: var(--text);
   cursor: default;
+  overflow: hidden;
+  isolation: isolate;
+}
+.quota-pip .pip-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--pct, 0%);
+  background: var(--pip-color, var(--green));
+  opacity: 0.4;
+  pointer-events: none;
+  transition: width 0.2s ease-out;
+  z-index: 0;
+}
+.quota-pip .pip-text {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text);
+  text-shadow: 0 0 2px var(--surface);
 }
 .quota-pip .quota-label {
   font-weight: 500;
-  opacity: 0.7;
+  opacity: 0.85;
 }
 .quota-pip.ok {
-  color: var(--green);
-  border-color: rgba(63, 185, 80, 0.4);
+  --pip-color: var(--green);
+  border-color: rgba(63, 185, 80, 0.45);
 }
 .quota-pip.warn {
-  color: var(--yellow);
-  border-color: rgba(210, 153, 34, 0.5);
+  --pip-color: var(--yellow);
+  border-color: rgba(210, 153, 34, 0.55);
 }
 .quota-pip.crit {
-  color: var(--red);
-  border-color: rgba(248, 81, 73, 0.5);
+  --pip-color: var(--red);
+  border-color: rgba(248, 81, 73, 0.55);
 }
 @media (max-width: 639px) {
   .header-quota {

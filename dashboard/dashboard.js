@@ -437,71 +437,72 @@ function formatTokens(n) {
   return Math.round(n / 1000) + 'k'
 }
 
-function getEffectiveContextLimit(name, st) {
-  // Override from user config takes priority
+// 1M is the default context limit for all models — the session state
+// doesn't reliably report whether a 1M or 200k window is in effect, and a
+// user who's running 1M models gets misleading "85% full" readouts if we
+// guess 200k. Users can override per-session from the ⋯ menu.
+var DEFAULT_CONTEXT_LIMIT = 1000000
+
+function getEffectiveContextLimit(name, _st) {
   if (contextOverrides[name] && contextOverrides[name].contextLimit) {
     return contextOverrides[name].contextLimit
   }
-  // Derive from model: Opus defaults to 1M, everything else 200k
-  var model = st && st.model ? st.model : ''
-  if (model.indexOf('opus') !== -1) return 1000000
-  return 200000
+  return DEFAULT_CONTEXT_LIMIT
 }
 
-function showContextMenu(e, sessionName, model) {
-  e.preventDefault()
-  var menu = document.getElementById('ctxMenu')
-  var isOpus = model && model.indexOf('opus') !== -1
-  menu.textContent = ''
+var CONTEXT_LIMIT_OPTIONS = [
+  { label: '1M tokens', value: 1000000 },
+  { label: '200k tokens', value: 200000 },
+]
 
-  if (isOpus) {
-    var header = document.createElement('div')
-    header.className = 'ctx-menu-header'
-    header.textContent = 'Context Window'
-    menu.appendChild(header)
-
-    // Find the session's status from lastSessions
-    var sessionSt = null
+function setContextLimit(sessionName, value) {
+  fetch('/api/overrides', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session: sessionName, contextLimit: value }),
+  })
+  contextOverrides[sessionName] = { contextLimit: value }
+  if (typeof updateSessions === 'function') updateSessions(lastSessions)
+  if (selectedSessionId === sessionName && typeof renderDetailHeader === 'function') {
     for (var i = 0; i < lastSessions.length; i++) {
       if (lastSessions[i].name === sessionName) {
-        sessionSt = lastSessions[i].metadata && lastSessions[i].metadata.status
+        renderDetailHeader(lastSessions[i])
         break
       }
     }
-    var currentLimit = getEffectiveContextLimit(sessionName, sessionSt)
-
-    ;[
-      { label: '1M tokens', value: 1000000 },
-      { label: '200k tokens', value: 200000 },
-    ].forEach(function (opt) {
-      var item = document.createElement('div')
-      item.className = 'ctx-menu-item'
-      item.textContent = opt.label
-      if (currentLimit === opt.value) {
-        var check = document.createElement('span')
-        check.className = 'check'
-        check.textContent = '\u2713'
-        item.appendChild(check)
-      }
-      item.addEventListener('click', function () {
-        fetch('/api/overrides', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session: sessionName, contextLimit: opt.value }),
-        })
-        contextOverrides[sessionName] = { contextLimit: opt.value }
-        menu.classList.remove('visible')
-        updateSessions(lastSessions)
-      })
-      menu.appendChild(item)
-    })
-  } else {
-    var noOpt = document.createElement('div')
-    noOpt.className = 'ctx-menu-header'
-    noOpt.textContent = 'No options for ' + (model || 'unknown model')
-    menu.appendChild(noOpt)
   }
+}
 
+function appendContextLimitItems(menu, sessionName) {
+  var header = document.createElement('div')
+  header.className = 'ctx-menu-header'
+  header.textContent = 'Context window'
+  menu.appendChild(header)
+  var currentLimit = getEffectiveContextLimit(sessionName, null)
+  CONTEXT_LIMIT_OPTIONS.forEach(function (opt) {
+    var item = document.createElement('div')
+    item.className = 'ctx-menu-item'
+    item.textContent = opt.label
+    if (currentLimit === opt.value) {
+      var check = document.createElement('span')
+      check.className = 'check'
+      check.textContent = '\u2713'
+      item.appendChild(check)
+    }
+    item.addEventListener('click', function (ev) {
+      ev.stopPropagation()
+      setContextLimit(sessionName, opt.value)
+      document.getElementById('ctxMenu').classList.remove('visible')
+    })
+    menu.appendChild(item)
+  })
+}
+
+function showContextMenu(e, sessionName /*, model */) {
+  e.preventDefault()
+  var menu = document.getElementById('ctxMenu')
+  menu.textContent = ''
+  appendContextLimitItems(menu, sessionName)
   menu.style.left = e.clientX + 'px'
   menu.style.top = e.clientY + 'px'
   menu.classList.add('visible')
@@ -558,6 +559,14 @@ function showSessionActionsMenu(sessionName, x, y) {
     })
     menu.appendChild(item)
   }
+
+  // Context-window override sits alongside archive/remove. Claude Code's
+  // session state doesn't report the active window size, so we default all
+  // sessions to 1M and let the user override per session here.
+  const separator = document.createElement('div')
+  separator.className = 'ctx-menu-separator'
+  menu.appendChild(separator)
+  appendContextLimitItems(menu, sessionName)
 
   // Clamp to viewport so the menu never pops off-screen on mobile.
   menu.style.left = Math.max(0, x) + 'px'
@@ -1047,6 +1056,7 @@ function updateQuota(q) {
     if (pct > 90) pip.classList.add('crit')
     else if (pct > 70) pip.classList.add('warn')
     else pip.classList.add('ok')
+    pip.style.setProperty('--pct', Math.min(100, Math.max(0, pct)) + '%')
     if (resetTs) {
       const diffMin = Math.max(0, Math.round((resetTs * 1000 - Date.now()) / 60000))
       const h = Math.floor(diffMin / 60)
@@ -1284,13 +1294,11 @@ function buildCardContents(s) {
   if (st && st.contextTokens !== null && st.contextTokens !== undefined) {
     var effLimit = getEffectiveContextLimit(s.name, st)
     var pct = Math.round((st.contextTokens / effLimit) * 100)
-    var ctxPctSpan = document.createElement('span')
-    ctxPctSpan.className = 'ctx-pct'
-    ctxPctSpan.textContent = 'ctx ' + pct + '%'
-    ctxPctSpan.title =
-      formatTokens(st.contextTokens) + ' / ' + formatTokens(effLimit) + ' tokens (' + pct + '%)'
-    metaEl.appendChild(ctxPctSpan)
-    ctxBar = buildCtxBar(pct)
+    ctxBar = buildCtxBar(pct, {
+      label: 'ctx',
+      tokens: st.contextTokens,
+      limit: effLimit,
+    })
   }
 
   // Active subagents — broadcast-enriched by the aggregator (active_subagents
@@ -1317,13 +1325,39 @@ function buildCardContents(s) {
   return { header: header, body: body, sparklineSlot: sparklineSlot, bell: null }
 }
 
-function buildCtxBar(pct) {
+// Build a labeled context progress bar with overlay text. opts.label is the
+// short prefix (e.g. "ctx"). opts.tokens / opts.limit drive the tooltip and
+// the displayed "Nk / Mk" suffix. The bar uses a translucent fill underlay
+// with foreground text on top so the percentage stays readable across all
+// fill states without resorting to mix-blend-mode.
+function buildCtxBar(pct, opts) {
+  opts = opts || {}
+  var clamped = Math.min(100, Math.max(0, pct))
   var wrap = document.createElement('div')
-  wrap.className = 'card-ctx-bar'
+  wrap.className = 'ctx-bar ' + (pct >= 90 ? 'crit' : pct >= 70 ? 'warn' : 'ok')
+  wrap.style.setProperty('--pct', clamped + '%')
   var fill = document.createElement('div')
-  fill.className = 'card-ctx-bar-fill ' + (pct >= 90 ? 'crit' : pct >= 70 ? 'warn' : 'ok')
-  fill.style.width = Math.min(100, Math.max(0, pct)) + '%'
+  fill.className = 'ctx-bar-fill'
   wrap.appendChild(fill)
+  var text = document.createElement('span')
+  text.className = 'ctx-bar-text'
+  var inside = pct + '%'
+  if (opts.tokens != null && opts.limit != null) {
+    inside =
+      (opts.label ? opts.label + ' ' : '') +
+      formatTokens(opts.tokens) +
+      ' / ' +
+      formatTokens(opts.limit) +
+      ' (' +
+      pct +
+      '%)'
+    wrap.title =
+      formatTokens(opts.tokens) + ' / ' + formatTokens(opts.limit) + ' tokens (' + pct + '%)'
+  } else if (opts.label) {
+    inside = opts.label + ' ' + pct + '%'
+  }
+  text.textContent = inside
+  wrap.appendChild(text)
   return wrap
 }
 
@@ -1835,8 +1869,8 @@ function renderDetailHeader(session) {
   if (ctxTokens) {
     const limit = getEffectiveContextLimit(name, st)
     const pct = Math.round((ctxTokens / limit) * 100)
-    ctxEl.textContent =
-      'ctx ' + formatTokens(ctxTokens) + ' / ' + formatTokens(limit) + ' (' + pct + '%)'
+    ctxEl.textContent = ''
+    ctxEl.appendChild(buildCtxBar(pct, { label: 'ctx', tokens: ctxTokens, limit }))
   } else {
     ctxEl.textContent = ''
   }
