@@ -2525,3 +2525,34 @@ section[data-view='switchboard'] .switchboard-wrap {
 .lightbox-download:hover {
   background: rgba(255, 255, 255, 0.2);
 }
+
+/* -------------------------------------------------------------------------
+   Mobile readability: the default 13px body size is tight on phones.
+   Bump the reading surfaces (transcript body, party-line message body,
+   session-detail stream) without enlarging the fixed chrome (tabs, quota
+   pips, status dots) so the header layout still fits.
+   ------------------------------------------------------------------------- */
+@media (max-width: 540px) {
+  .detail-stream,
+  .entry-body,
+  .entry-body p,
+  .entry-body li,
+  .pl-body,
+  .msg .body {
+    font-size: 15px;
+    line-height: 1.55;
+  }
+  .entry-body pre,
+  .entry-body code,
+  .pl-body pre,
+  .pl-body code {
+    font-size: 13px;
+  }
+  .entry-label {
+    font-size: 11px;
+  }
+  .detail-send textarea.msg,
+  .detail-send input.msg {
+    font-size: 15px;
+  }
+}
