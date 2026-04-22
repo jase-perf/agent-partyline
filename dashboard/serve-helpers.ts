@@ -1,5 +1,117 @@
 import type { Envelope } from '../src/types.js'
 import { createEnvelope } from '../src/protocol.js'
+import type { HookEvent } from '../src/events.js'
+
+export interface ApiErrorDetails {
+  /** HTTP status from Anthropic ("529", "429", "500", etc.) when available. */
+  status: number | null
+  /** Canonical error type ("overloaded_error", "rate_limit_error", "api_error"). */
+  errorType: string
+  /** Short human message, e.g. "Overloaded". */
+  message: string
+}
+
+/**
+ * Classify a JSONL entry as a Claude Code API error, or return null.
+ *
+ * Claude Code records API errors in two shapes:
+ *   1. `{ type: "system", subtype: "api_error", error: { status, headers, ... } }`
+ *   2. `{ type: "assistant", isApiErrorMessage: true, message: { content:[{ text: "API Error: {json}" }] } }`
+ *
+ * Both are silent — Claude Code keeps retrying internally and never emits a
+ * Stop hook, so the session's state in the aggregator stays "working" forever
+ * unless we detect these records ourselves.
+ */
+export function classifyApiError(entry: Record<string, unknown>): ApiErrorDetails | null {
+  if (entry.type === 'system' && entry.subtype === 'api_error') {
+    const err = entry.error as { status?: number; message?: string; type?: string } | undefined
+    const status = err && typeof err.status === 'number' ? err.status : null
+    return {
+      status,
+      errorType: (err && typeof err.type === 'string' && err.type) || 'api_error',
+      message:
+        (err && typeof err.message === 'string' && err.message) ||
+        (status === 529
+          ? 'Overloaded'
+          : status === 429
+            ? 'Rate limited'
+            : status
+              ? `HTTP ${status}`
+              : 'API error'),
+    }
+  }
+
+  if (entry.type === 'assistant' && entry.isApiErrorMessage === true) {
+    const msg = entry.message as { content?: Array<{ type?: string; text?: string }> } | undefined
+    const content = msg?.content
+    const text =
+      Array.isArray(content) && content[0]?.type === 'text' && typeof content[0].text === 'string'
+        ? content[0].text
+        : ''
+    // Typical text: `API Error: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}...}`
+    const m = text.match(/API Error:\s*(\{[\s\S]*\})/)
+    type ApiErrorWrapper = { type?: string; error?: { type?: string; message?: string } }
+    let parsed: ApiErrorWrapper | null = null
+    if (m) {
+      try {
+        parsed = JSON.parse(m[1]!) as ApiErrorWrapper
+      } catch {
+        parsed = null
+      }
+    }
+    const inner = parsed?.error
+    return {
+      status: null,
+      errorType: inner?.type || 'api_error',
+      message: inner?.message || 'API error',
+    }
+  }
+
+  return null
+}
+
+export interface ApiErrorFrame {
+  type: 'api-error'
+  data: {
+    session_id: string
+    session_name: string | null
+    file_path: string
+    ts: string
+    status: number | null
+    errorType: string
+    message: string
+  }
+}
+
+export interface UserPromptFrame {
+  type: 'user-prompt'
+  data: {
+    session_name: string
+    session_id: string
+    ts: string
+    prompt: string
+  }
+}
+
+/**
+ * Builds a `user-prompt` observer frame from a UserPromptSubmit hook event,
+ * or null if the event is not a UserPromptSubmit with a usable prompt string.
+ * Extracted for testability.
+ */
+export function buildUserPromptFrame(ev: HookEvent): UserPromptFrame | null {
+  if (ev.hook_event !== 'UserPromptSubmit') return null
+  const prompt = (ev.payload as { prompt?: unknown }).prompt
+  if (typeof prompt !== 'string' || prompt.length === 0) return null
+  return {
+    type: 'user-prompt',
+    data: {
+      session_name: ev.session_name,
+      session_id: ev.session_id,
+      ts: ev.ts,
+      prompt,
+    },
+  }
+}
 
 export interface PermissionRequestFrame {
   type: 'permission-request'

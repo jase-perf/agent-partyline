@@ -42,6 +42,7 @@ export interface Envelope {
   body: string | null
   callback_id: string | null
   response_to: string | null
+  attachments?: import('../types.js').Attachment[]
 }
 
 export interface Switchboard {
@@ -53,6 +54,17 @@ export interface Switchboard {
   handleObserverClose(ws: ObserverSocket): void
   broadcastObserverFrame(frame: unknown): void
   routeEnvelope(envelope: Envelope): void
+  /**
+   * Reconcile ccpl_sessions.cc_session_uuid for a given name against an
+   * authoritative new UUID (e.g. from a hook event's session_id). If the
+   * stored UUID differs, archive the old one and update + emit a delta.
+   * No-op if the row is missing, newUuid is empty, or UUIDs already match.
+   */
+  reconcileCcSessionUuid(name: string, newUuid: string | null, reason: string): void
+  /** Force-close any active WS for this session. Returns true if a socket was closed. */
+  closeSession(name: string, code?: number, reason?: string): boolean
+  /** True if a session currently has a live WS connection. */
+  isOnline(name: string): boolean
 }
 
 export function createSwitchboard(db: Database): Switchboard {
@@ -160,7 +172,21 @@ export function createSwitchboard(db: Database): Switchboard {
     }
   }
 
+  function reconcileCcSessionUuid(name: string, newUuid: string | null, reason: string): void {
+    if (!newUuid) return
+    const row = getSessionByName(db, name)
+    if (!row) return
+    if (row.cc_session_uuid === newUuid) return
+    if (row.cc_session_uuid) {
+      archiveSession(db, name, row.cc_session_uuid, reason)
+    }
+    updateSessionOnConnect(db, name, newUuid, row.pid, row.machine_id)
+    const fresh = getSessionByName(db, name)
+    if (fresh) emitSessionDelta(fresh, { cc_session_uuid: fresh.cc_session_uuid })
+  }
+
   return {
+    reconcileCcSessionUuid,
     handleSessionHello(ws, frame) {
       const row = getSessionByToken(db, frame.token)
       if (!row) return { ok: false, error: 'invalid_token', code: 4401 }
@@ -217,28 +243,19 @@ export function createSwitchboard(db: Database): Switchboard {
           if (!row) return
           const oldUuid = frame['old_uuid']
           const newUuid = frame['new_uuid']
-          // If the row has any current uuid, archive it before we overwrite.
-          // Use the client-provided reason when oldUuid matches; otherwise
-          // flag the drift in the reason string.
-          if (row.cc_session_uuid) {
-            const reason =
-              oldUuid && row.cc_session_uuid === oldUuid ? 'clear' : 'rotate_uuid_drift'
-            archiveSession(db, name, row.cc_session_uuid, reason)
-          }
-          updateSessionOnConnect(
-            db,
-            name,
-            newUuid ? String(newUuid) : null,
-            row.pid,
-            row.machine_id,
-          )
-          const fresh = getSessionByName(db, name)!
-          emitSessionDelta(fresh, { cc_session_uuid: fresh.cc_session_uuid })
+          // Use the client-provided reason when oldUuid matches the stored
+          // value; otherwise flag drift.
+          const reason = oldUuid && row.cc_session_uuid === oldUuid ? 'clear' : 'rotate_uuid_drift'
+          reconcileCcSessionUuid(name, newUuid ? String(newUuid) : null, reason)
           return
         }
         case 'send':
         case 'respond': {
           const id = serverId()
+          const rawAtts = frame['attachments']
+          const attachments = Array.isArray(rawAtts)
+            ? (rawAtts as import('../types.js').Attachment[])
+            : undefined
           const envelope: Envelope = {
             id,
             ts: Date.now(),
@@ -248,6 +265,7 @@ export function createSwitchboard(db: Database): Switchboard {
             body: frame['body'] == null ? null : String(frame['body']),
             callback_id: frame['callback_id'] == null ? null : String(frame['callback_id']),
             response_to: frame['response_to'] == null ? null : String(frame['response_to']),
+            ...(attachments && attachments.length > 0 ? { attachments } : {}),
           }
           routeEnvelope(envelope)
           try {
@@ -332,5 +350,21 @@ export function createSwitchboard(db: Database): Switchboard {
     },
 
     routeEnvelope,
+
+    closeSession(name, code = 4401, reason = 'removed') {
+      const sock = sessionsByName.get(name)
+      if (!sock) return false
+      sessionsByName.delete(name)
+      try {
+        sock.close(code, reason)
+      } catch {
+        /* ignore */
+      }
+      return true
+    },
+
+    isOnline(name) {
+      return sessionsByName.has(name)
+    },
   }
 }

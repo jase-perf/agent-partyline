@@ -130,3 +130,22 @@ CREATE TABLE IF NOT EXISTS dashboard_sessions (
   expires_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_dashboard_sessions_expires ON dashboard_sessions(expires_at);
+
+-- Attachments are referenced by envelope.attachments[].id and served by
+-- GET /api/attachment/<id>. The file bytes live on disk at
+-- ~/.config/party-line/attachments/<id>/file; this table tracks metadata +
+-- envelope linkage for routing, auth, and retention pruning.
+CREATE TABLE IF NOT EXISTS attachments (
+  id TEXT PRIMARY KEY,
+  envelope_id TEXT,
+  uploader_session TEXT NOT NULL,
+  name TEXT NOT NULL,
+  media_type TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  stored_path TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attachments_envelope ON attachments(envelope_id);
+CREATE INDEX IF NOT EXISTS idx_attachments_expires ON attachments(expires_at);
+CREATE INDEX IF NOT EXISTS idx_attachments_uploader ON attachments(uploader_session);

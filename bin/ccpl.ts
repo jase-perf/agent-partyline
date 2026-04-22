@@ -6,6 +6,7 @@ import {
   chmodSync,
   writeFileSync,
   readFileSync,
+  readdirSync,
   existsSync,
   unlinkSync,
 } from 'node:fs'
@@ -69,11 +70,7 @@ function validateName(name: string): void {
   }
 }
 
-async function api(
-  path: string,
-  init: RequestInit = {},
-  token?: string,
-): Promise<Response> {
+async function api(path: string, init: RequestInit = {}, token?: string): Promise<Response> {
   const headers = new Headers(init.headers as HeadersInit | undefined)
   if (!headers.has('Content-Type') && init.body) {
     headers.set('Content-Type', 'application/json')
@@ -107,8 +104,27 @@ async function cmdNew(name: string, cwdOverride?: string): Promise<void> {
 }
 
 function jsonlPathForCwdUuid(cwd: string, uuid: string): string {
-  const encoded = cwd.replace(/\//g, '-')
-  return join(homedir(), '.claude', 'projects', encoded, `${uuid}.jsonl`)
+  // Claude Code encodes project cwds by replacing every non-[a-zA-Z0-9] char
+  // with a hyphen — so "/home/claude/Claude_Main" becomes
+  // "-home-claude-Claude-Main" (underscore IS replaced). Using just `/`→`-`
+  // misses underscores, spaces, dots, etc. and yields "directory not found"
+  // for perfectly valid sessions.
+  const encoded = cwd.replace(/[^a-zA-Z0-9-]/g, '-')
+  const direct = join(homedir(), '.claude', 'projects', encoded, `${uuid}.jsonl`)
+  if (existsSync(direct)) return direct
+  // Fallback: scan projects/ for any subdir containing <uuid>.jsonl. Handles
+  // encoder drift (Claude Code tweaking their slug rules) without breaking us.
+  const projectsRoot = join(homedir(), '.claude', 'projects')
+  try {
+    for (const d of readdirSync(projectsRoot, { withFileTypes: true })) {
+      if (!d.isDirectory()) continue
+      const candidate = join(projectsRoot, d.name, `${uuid}.jsonl`)
+      if (existsSync(candidate)) return candidate
+    }
+  } catch {
+    /* ignore */
+  }
+  return direct
 }
 
 function promptYn(q: string): Promise<boolean> {
@@ -137,7 +153,12 @@ async function cmdLaunch(name: string): Promise<void> {
     die(`Cannot chdir to ${row.cwd}: ${String(err)}`)
   }
 
-  if (process.env.TMUX) {
+  // Rename the current tmux window to the session name. TMUX env var may be
+  // stripped by sudo/su, so also treat TERM=tmux* as evidence we're running
+  // inside tmux. The spawn is fire-and-forget; errors (no tmux, not inside a
+  // session) are swallowed.
+  const insideTmux = !!process.env.TMUX || (process.env.TERM ?? '').startsWith('tmux')
+  if (insideTmux) {
     try {
       spawn('tmux', ['rename-window', name], { stdio: 'ignore' }).unref()
     } catch {

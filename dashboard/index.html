@@ -13,8 +13,11 @@
     <link rel="stylesheet" href="/dashboard.css" />
     <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#0d1117" />
-    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/icon-32.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Party Line" />
   </head>
@@ -33,7 +36,17 @@
     </div>
 
     <header>
-      <h1>Party Line</h1>
+      <h1>
+        <img
+          src="/icons/logo-header.png"
+          srcset="/icons/logo-header.png 1x, /icons/logo-header@2x.png 2x"
+          alt=""
+          class="logo"
+          width="28"
+          height="28"
+        />
+        <span>Party Line</span>
+      </h1>
       <nav class="tabs" id="tabs">
         <button data-view="switchboard" class="active">Switchboard</button>
         <button data-view="session-detail" disabled>Session</button>
@@ -112,11 +125,23 @@
           >
             🔕
           </button>
+          <button
+            id="detail-actions"
+            class="detail-actions-btn"
+            type="button"
+            title="Session actions"
+            aria-label="Session actions"
+            aria-haspopup="menu"
+          >
+            ⋯
+          </button>
           <h2 id="detail-name"></h2>
           <div class="detail-meta">
             <span id="detail-cwd"></span>
             <span id="detail-model"></span>
             <span id="detail-ctx"></span>
+            <span id="detail-subagents"></span>
+            <span id="detail-last"></span>
             <span id="detail-host"></span>
           </div>
         </div>
@@ -144,14 +169,33 @@
             doDetailSend()
           "
         >
-          <textarea
-            id="detail-send-msg"
-            class="msg"
-            placeholder="Message this session..."
-            rows="1"
-            autocomplete="off"
-          ></textarea>
-          <button type="submit">Send</button>
+          <div class="attach-chips" id="detail-attach-chips" hidden></div>
+          <div class="detail-send-row">
+            <button
+              type="button"
+              id="detail-attach-btn"
+              class="attach-btn"
+              title="Attach files"
+              aria-label="Attach files"
+            >
+              +
+            </button>
+            <input
+              type="file"
+              id="detail-attach-input"
+              multiple
+              hidden
+              accept="image/*,.pdf,.txt,.md,.json,.csv,.log,.zip"
+            />
+            <textarea
+              id="detail-send-msg"
+              class="msg"
+              placeholder="Message this session... (paste or drop files to attach)"
+              rows="1"
+              autocomplete="off"
+            ></textarea>
+            <button type="submit">Send</button>
+          </div>
         </form>
       </section>
 
@@ -203,6 +247,27 @@
     </div>
 
     <div class="ctx-menu" id="ctxMenu"></div>
+    <div class="modal-overlay" id="confirmOverlay">
+      <div
+        class="modal confirm-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirmTitle"
+      >
+        <div class="modal-header">
+          <h3 id="confirmTitle">Confirm</h3>
+        </div>
+        <div class="modal-body" id="confirmBody"></div>
+        <div class="confirm-actions">
+          <button type="button" id="confirmCancel" class="confirm-btn confirm-btn-cancel">
+            Cancel
+          </button>
+          <button type="button" id="confirmOk" class="confirm-btn confirm-btn-danger">
+            Remove
+          </button>
+        </div>
+      </div>
+    </div>
     <div class="modal-overlay" id="modalOverlay">
       <div class="modal">
         <div class="modal-header">
@@ -212,6 +277,12 @@
         <div class="modal-meta" id="modalMeta"></div>
         <div class="modal-body" id="modalBody"></div>
       </div>
+    </div>
+
+    <div class="lightbox" id="lightbox" hidden>
+      <button class="lightbox-close" id="lightbox-close" aria-label="Close">&times;</button>
+      <a class="lightbox-download" id="lightbox-download" download>Download</a>
+      <img class="lightbox-img" id="lightbox-img" alt="" />
     </div>
 
     <script src="/vendor/marked.min.js"></script>

@@ -325,6 +325,87 @@ describe('switchboard', () => {
     cleanup()
   })
 
+  test('reconcileCcSessionUuid archives stale uuid and adopts new one', () => {
+    const row = registerSession(db, 'foo', '/tmp')
+    const sb = createSwitchboard(db)
+    const ws = fakeWs('session')
+    const obs = fakeWs('observer')
+    sb.handleObserverOpen(obs as never)
+    sb.handleSessionHello(ws, {
+      token: row.token,
+      name: 'foo',
+      cc_session_uuid: 'uuid-old',
+      pid: 1,
+      machine_id: null,
+    })
+
+    obs.sent.length = 0
+    sb.reconcileCcSessionUuid('foo', 'uuid-new', 'hook_drift')
+
+    const archives = db.query(`SELECT * FROM ccpl_archives WHERE name = ?`).all('foo') as Array<{
+      old_uuid: string
+      reason: string
+    }>
+    expect(archives.length).toBe(1)
+    expect(archives[0]!.old_uuid).toBe('uuid-old')
+    expect(archives[0]!.reason).toBe('hook_drift')
+
+    const current = db
+      .query(`SELECT cc_session_uuid FROM ccpl_sessions WHERE name = ?`)
+      .get('foo') as { cc_session_uuid: string }
+    expect(current.cc_session_uuid).toBe('uuid-new')
+
+    const delta = obs.sent.map((m) => JSON.parse(m)).find((f) => f.type === 'session-delta')
+    expect(delta).toBeDefined()
+    expect(delta.session).toBe('foo')
+    expect(delta.changes.cc_session_uuid).toBe('uuid-new')
+    cleanup()
+  })
+
+  test('reconcileCcSessionUuid no-ops when uuid matches current', () => {
+    const row = registerSession(db, 'foo', '/tmp')
+    const sb = createSwitchboard(db)
+    const ws = fakeWs('session')
+    sb.handleSessionHello(ws, {
+      token: row.token,
+      name: 'foo',
+      cc_session_uuid: 'uuid-same',
+      pid: 1,
+      machine_id: null,
+    })
+
+    sb.reconcileCcSessionUuid('foo', 'uuid-same', 'hook_drift')
+
+    const archives = db.query(`SELECT * FROM ccpl_archives WHERE name = ?`).all('foo')
+    expect(archives.length).toBe(0)
+    cleanup()
+  })
+
+  test('reconcileCcSessionUuid is a no-op when newUuid is empty or name is unknown', () => {
+    const row = registerSession(db, 'foo', '/tmp')
+    const sb = createSwitchboard(db)
+    const ws = fakeWs('session')
+    sb.handleSessionHello(ws, {
+      token: row.token,
+      name: 'foo',
+      cc_session_uuid: 'uuid-a',
+      pid: 1,
+      machine_id: null,
+    })
+
+    sb.reconcileCcSessionUuid('foo', null, 'hook_drift')
+    sb.reconcileCcSessionUuid('foo', '', 'hook_drift')
+    sb.reconcileCcSessionUuid('bogus', 'uuid-b', 'hook_drift')
+
+    const archives = db.query(`SELECT * FROM ccpl_archives`).all()
+    expect(archives.length).toBe(0)
+    const current = db
+      .query(`SELECT cc_session_uuid FROM ccpl_sessions WHERE name = ?`)
+      .get('foo') as { cc_session_uuid: string }
+    expect(current.cc_session_uuid).toBe('uuid-a')
+    cleanup()
+  })
+
   test('uuid-rotate with mismatched old_uuid still archives current uuid', () => {
     const row = registerSession(db, 'foo', '/tmp')
     const sb = createSwitchboard(db)

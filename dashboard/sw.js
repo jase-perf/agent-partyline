@@ -1,7 +1,7 @@
 // Party Line Dashboard Service Worker.
 // Caches the app shell, serves it offline, and handles notification clicks.
 
-const CACHE_NAME = 'party-line-shell-v1'
+const CACHE_NAME = 'party-line-shell-v3'
 
 const SHELL = [
   '/',
@@ -30,12 +30,25 @@ self.addEventListener('activate', (event) => {
   )
 })
 
+// Network-first for shell files: always try network, fall back to cache only
+// if offline. Cache-first was silently serving stale JS/HTML forever, making
+// dashboard updates invisible until CACHE_NAME was bumped.
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url)
-  // Only serve shell from cache. Everything else (API, /ws, /login) hits network.
-  if (event.request.method === 'GET' && SHELL.includes(url.pathname)) {
-    event.respondWith(caches.match(event.request).then((cached) => cached || fetch(event.request)))
-  }
+  if (event.request.method !== 'GET') return
+  if (!SHELL.includes(url.pathname)) return
+  event.respondWith(
+    fetch(event.request)
+      .then((res) => {
+        // Refresh the cache in the background so offline mode has latest shell.
+        if (res && res.ok) {
+          const clone = res.clone()
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone))
+        }
+        return res
+      })
+      .catch(() => caches.match(event.request).then((cached) => cached || Response.error())),
+  )
 })
 
 self.addEventListener('notificationclick', (event) => {

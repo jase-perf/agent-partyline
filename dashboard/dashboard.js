@@ -22,10 +22,7 @@ let swRegistration = null
 if ('serviceWorker' in navigator) {
   swRegistration = navigator.serviceWorker
     .register('/sw.js', { scope: '/' })
-    .then((reg) => {
-      console.log('[sw] registered scope:', reg.scope)
-      return reg
-    })
+    .then((reg) => reg)
     .catch((err) => {
       console.error('[sw] registration failed:', err)
       return null
@@ -35,6 +32,7 @@ let sessionSources = {} // session name -> source string, populated from session
 let currentView = 'switchboard'
 let localMachineId = null
 let sessionMachines = {} // session name -> machine_id
+let sessionActiveSubagents = {} // session name -> count of active subagents
 
 // --- localStorage UI state helpers ---
 
@@ -277,8 +275,8 @@ function connect() {
       location.href = '/login?next=' + encodeURIComponent(nextPath)
       return
     }
-    connStatus.textContent = 'disconnected \u2014 reconnecting...'
-    connStatus.style.color = '#f85149'
+    connStatus.textContent = 'reconnecting\u2026'
+    connStatus.style.color = 'var(--yellow)'
     setTimeout(connect, 2000)
   }
 
@@ -294,6 +292,8 @@ function connect() {
       handleSessionsSnapshot(data.sessions)
     } else if (data.type === 'session-delta') {
       applySessionDelta(data)
+    } else if (data.type === 'session-removed') {
+      handleSessionRemoved(data.session)
     } else if (data.type === 'envelope') {
       // Adapt switchboard wire shape (envelope_type) back to legacy shape (type)
       // so existing renderers keep working.
@@ -306,6 +306,7 @@ function connect() {
         body: data.body == null ? '' : data.body,
         callback_id: data.callback_id,
         response_to: data.response_to,
+        attachments: Array.isArray(data.attachments) ? data.attachments : undefined,
       }
       addMessage(adapted)
       addMessageToBus(adapted)
@@ -349,7 +350,6 @@ function connect() {
       updateSessions(lastSessions)
     } else if (data.type === 'session-update') {
       handleSessionUpdate(data.data)
-      if (data.data && data.data.name) bumpUnread(data.data.name)
       try {
         notif.onSessionUpdate(data.data)
       } catch (err) {
@@ -357,13 +357,28 @@ function connect() {
       }
     } else if (data.type === 'jsonl') {
       handleJsonlEvent(data.data)
-      var resolvedName = resolveNameFromJsonlPath(data.data.file_path)
-      bumpUnread(resolvedName || data.data.session_id)
     } else if (data.type === 'hook-event') {
       handleHookEvent(data.data)
       maybeHandleCompactForCurrentView(data.data)
+      // Unread counter: ONLY bump on events that represent a real
+      // "something you should look at" moment — session finished turn (Stop),
+      // Notification hook (model asked for input), or session-end. Tool
+      // calls, user prompts, subagent spawns, etc. don't count.
+      if (
+        data.data &&
+        data.data.session_name &&
+        (data.data.hook_event === 'Stop' ||
+          data.data.hook_event === 'Notification' ||
+          data.data.hook_event === 'SessionEnd')
+      ) {
+        bumpUnread(data.data.session_name)
+      }
     } else if (data.type === 'stream-reset') {
       handleStreamReset(data.data)
+    } else if (data.type === 'user-prompt') {
+      handleUserPromptLive(data.data)
+    } else if (data.type === 'api-error') {
+      handleApiError(data.data)
     }
     // Old frame types (sessions, cross-call) are no longer emitted by /ws/observer.
     // Handlers kept as no-ops for any remaining bootstrap callers.
@@ -497,6 +512,299 @@ document.addEventListener('click', function () {
   document.getElementById('ctxMenu').classList.remove('visible')
 })
 
+// --- Session actions: context menu + confirm-remove modal ---
+// Reuses the #ctxMenu div with a distinct set of items. Triggered by
+// right-click / long-press on session cards and the ⋯ button in the
+// session-detail header. Dismissed on click-outside, Escape, and scroll.
+
+function hideCtxMenu() {
+  document.getElementById('ctxMenu').classList.remove('visible')
+}
+
+function showSessionActionsMenu(sessionName, x, y) {
+  const menu = document.getElementById('ctxMenu')
+  if (!menu) return
+  menu.textContent = ''
+
+  const items = [
+    {
+      label: 'Open',
+      action: () => openSessionDetail(sessionName),
+    },
+    {
+      label: 'Archive current conversation',
+      action: () => archiveSessionAction(sessionName),
+    },
+    {
+      label: 'Remove session…',
+      danger: true,
+      action: () => confirmRemoveSession(sessionName),
+    },
+  ]
+
+  for (const spec of items) {
+    const item = document.createElement('div')
+    item.className = 'ctx-menu-item'
+    if (spec.danger) item.classList.add('ctx-menu-item-danger')
+    item.textContent = spec.label
+    item.addEventListener('click', (ev) => {
+      ev.stopPropagation()
+      hideCtxMenu()
+      try {
+        spec.action()
+      } catch (err) {
+        console.error('[session-actions] item failed:', err)
+      }
+    })
+    menu.appendChild(item)
+  }
+
+  // Clamp to viewport so the menu never pops off-screen on mobile.
+  menu.style.left = Math.max(0, x) + 'px'
+  menu.style.top = Math.max(0, y) + 'px'
+  menu.classList.add('visible')
+
+  // Re-measure and nudge back on screen if needed (bounded by layout pass).
+  requestAnimationFrame(() => {
+    const r = menu.getBoundingClientRect()
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    let nx = r.left
+    let ny = r.top
+    if (r.right > vw) nx = Math.max(0, vw - r.width - 4)
+    if (r.bottom > vh) ny = Math.max(0, vh - r.height - 4)
+    menu.style.left = nx + 'px'
+    menu.style.top = ny + 'px'
+  })
+}
+
+async function archiveSessionAction(sessionName) {
+  try {
+    const res = await fetch('/api/session/archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: sessionName }),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      console.warn('[session-actions] archive failed:', res.status, body)
+      // nothing_to_archive is common (session never connected) — silent.
+      if (body && body.error !== 'nothing_to_archive') {
+        alert('Archive failed: ' + (body.error || res.status))
+      }
+    }
+    // Success path: server broadcasts session-delta with cc_session_uuid=null
+    // and the existing applySessionDelta handler updates the UI.
+  } catch (err) {
+    console.error('[session-actions] archive error:', err)
+    alert('Archive failed: ' + (err.message || 'network error'))
+  }
+}
+
+function confirmRemoveSession(sessionName) {
+  const overlay = document.getElementById('confirmOverlay')
+  const title = document.getElementById('confirmTitle')
+  const bodyEl = document.getElementById('confirmBody')
+  const okBtn = document.getElementById('confirmOk')
+  const cancelBtn = document.getElementById('confirmCancel')
+  if (!overlay || !okBtn || !cancelBtn || !bodyEl) {
+    // Fallback to window.confirm if modal markup is missing.
+    if (window.confirm('Remove session "' + sessionName + '"? This cannot be undone.')) {
+      removeSessionAction(sessionName)
+    }
+    return
+  }
+  title.textContent = 'Remove session?'
+  bodyEl.textContent = ''
+  const p1 = document.createElement('p')
+  p1.append('Permanently remove ')
+  const strong = document.createElement('strong')
+  strong.textContent = sessionName
+  p1.appendChild(strong)
+  p1.append('?')
+  const p2 = document.createElement('p')
+  p2.style.marginTop = '10px'
+  p2.style.color = 'var(--text-dim)'
+  p2.style.fontSize = '12px'
+  p2.textContent =
+    'The session row, its archived UUIDs, and the local token file will be deleted. An open WebSocket connection will be closed. This cannot be undone.'
+  bodyEl.appendChild(p1)
+  bodyEl.appendChild(p2)
+
+  okBtn.textContent = 'Remove'
+  okBtn.disabled = false
+
+  function close() {
+    overlay.classList.remove('visible')
+    okBtn.removeEventListener('click', onOk)
+    cancelBtn.removeEventListener('click', onCancel)
+    overlay.removeEventListener('click', onOverlay)
+    document.removeEventListener('keydown', onKey)
+  }
+  function onOverlay(ev) {
+    if (ev.target === overlay) close()
+  }
+  function onKey(ev) {
+    if (ev.key === 'Escape') close()
+  }
+  async function onOk() {
+    okBtn.disabled = true
+    okBtn.textContent = 'Removing…'
+    try {
+      await removeSessionAction(sessionName)
+    } finally {
+      close()
+    }
+  }
+  function onCancel() {
+    close()
+  }
+
+  okBtn.addEventListener('click', onOk)
+  cancelBtn.addEventListener('click', onCancel)
+  overlay.addEventListener('click', onOverlay)
+  document.addEventListener('keydown', onKey)
+  overlay.classList.add('visible')
+  cancelBtn.focus()
+}
+
+async function removeSessionAction(sessionName) {
+  try {
+    const res = await fetch('/api/session/remove', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: sessionName }),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      alert('Remove failed: ' + (body.error || res.status))
+      return
+    }
+    // Success: server broadcasts session-removed; handleSessionRemoved will
+    // drop the card and route away from the detail view if needed.
+  } catch (err) {
+    console.error('[session-actions] remove error:', err)
+    alert('Remove failed: ' + (err.message || 'network error'))
+  }
+}
+
+function handleSessionRemoved(name) {
+  if (!name) return
+  // Drop from in-memory state so subsequent grid updates don't re-add a card.
+  lastSessions = lastSessions.filter((s) => s.name !== name)
+  sessionRevisions.delete(name)
+  delete sessionSources[name]
+  delete sessionMachines[name]
+  delete sessionActiveSubagents[name]
+
+  // Drop the card from the DOM immediately.
+  const grid = document.getElementById('overview-grid')
+  if (grid) {
+    const card = grid.querySelector('[data-session-id="' + CSS.escape(name) + '"]')
+    if (card) card.remove()
+  }
+
+  // If currently viewing this session's detail, bounce back to switchboard.
+  if (currentView === 'session-detail' && selectedSessionId === name) {
+    navigate({ view: 'switchboard' })
+  }
+}
+
+// Wire right-click + long-press on the Switchboard grid (delegated).
+;(function wireCardContextMenu() {
+  const grid = document.getElementById('overview-grid')
+  if (!grid) return
+
+  grid.addEventListener('contextmenu', (ev) => {
+    const card = ev.target.closest('.session-card')
+    if (!card) return
+    ev.preventDefault()
+    const name = card.dataset.sessionId
+    if (!name) return
+    showSessionActionsMenu(name, ev.clientX, ev.clientY)
+  })
+
+  // Long-press for touch devices. 500ms. Movement > 10px cancels.
+  let pressTimer = null
+  let pressStart = null
+  let pressSuppressClick = false
+  function cancelPress() {
+    if (pressTimer) {
+      clearTimeout(pressTimer)
+      pressTimer = null
+    }
+    pressStart = null
+  }
+  grid.addEventListener(
+    'touchstart',
+    (ev) => {
+      if (ev.touches.length !== 1) {
+        cancelPress()
+        return
+      }
+      const card = ev.target.closest('.session-card')
+      if (!card) return
+      const t = ev.touches[0]
+      pressCard = card
+      pressStart = { x: t.clientX, y: t.clientY }
+      pressTimer = setTimeout(() => {
+        const name = card.dataset.sessionId
+        if (name) {
+          // Block the click that would otherwise open the session detail.
+          pressSuppressClick = true
+          showSessionActionsMenu(name, pressStart.x, pressStart.y)
+        }
+        pressTimer = null
+      }, 500)
+    },
+    { passive: true },
+  )
+  grid.addEventListener(
+    'touchmove',
+    (ev) => {
+      if (!pressStart || ev.touches.length !== 1) return
+      const t = ev.touches[0]
+      const dx = t.clientX - pressStart.x
+      const dy = t.clientY - pressStart.y
+      if (dx * dx + dy * dy > 100) cancelPress()
+    },
+    { passive: true },
+  )
+  grid.addEventListener('touchend', cancelPress)
+  grid.addEventListener('touchcancel', cancelPress)
+
+  // If long-press fired, suppress the synthetic click that follows touchend
+  // so we don't immediately open the session detail behind the menu.
+  grid.addEventListener(
+    'click',
+    (ev) => {
+      if (pressSuppressClick) {
+        ev.stopPropagation()
+        ev.preventDefault()
+        pressSuppressClick = false
+      }
+    },
+    true,
+  )
+
+  // Close the menu on scroll (overview grid itself or window).
+  window.addEventListener('scroll', hideCtxMenu, { passive: true, capture: true })
+})()
+
+// Kebab on the session-detail header.
+document.getElementById('detail-actions')?.addEventListener('click', (ev) => {
+  ev.stopPropagation()
+  if (!selectedSessionId) return
+  const btn = ev.currentTarget
+  const r = btn.getBoundingClientRect()
+  showSessionActionsMenu(selectedSessionId, r.left, r.bottom + 4)
+})
+
+// Close ctx-menu on Escape.
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') hideCtxMenu()
+})
+
 // Session detail modal
 function showSessionModal(s) {
   var st = s.metadata && s.metadata.status ? s.metadata.status : null
@@ -616,8 +924,17 @@ function applySessionDelta(delta) {
   var md = (row.metadata = row.metadata || {})
   var status = (md.status = md.status || {})
   var c = delta.changes || {}
+  var uuidRotated = false
   if ('online' in c) status.state = c.online ? 'idle' : 'ended'
-  if ('cc_session_uuid' in c) status.sessionId = c.cc_session_uuid
+  if ('cc_session_uuid' in c) {
+    var prevUuid = status.sessionId || null
+    status.sessionId = c.cc_session_uuid
+    // A non-null → non-null change is a /clear-style rotation. null → id is a
+    // first-connect and we don't want to force-reload on that.
+    if (prevUuid && c.cc_session_uuid && prevUuid !== c.cc_session_uuid) {
+      uuidRotated = true
+    }
+  }
   if ('state' in c) status.state = c.state
   if ('current_tool' in c) status.currentTool = c.current_tool
   if ('last_text' in c) status.lastText = c.last_text
@@ -629,6 +946,13 @@ function applySessionDelta(delta) {
       if (typeof renderDetailHeader === 'function') renderDetailHeader(row)
     } catch (err) {
       /* ignore */
+    }
+    // On a /clear rotation, the old JSONL is no longer the live conversation;
+    // blow away the rendered transcript and re-fetch from the new UUID.
+    if (uuidRotated && typeof renderStream === 'function') {
+      lastRenderedUuid = null
+      renderedEntryKeys = new Set()
+      renderStream({ force: true })
     }
   }
 }
@@ -727,7 +1051,14 @@ function updateQuota(q) {
       const diffMin = Math.max(0, Math.round((resetTs * 1000 - Date.now()) / 60000))
       const h = Math.floor(diffMin / 60)
       const m = diffMin % 60
-      const timeStr = h > 0 ? h + 'h ' + m + 'm' : m + 'm'
+      let timeStr
+      if (windowLabel === '7-day') {
+        const d = Math.floor(h / 24)
+        const hr = h % 24
+        timeStr = d > 0 ? d + 'd ' + hr + 'h' : hr + 'h'
+      } else {
+        timeStr = h > 0 ? h + 'h ' + m + 'm' : m + 'm'
+      }
       pip.title = windowLabel + ' window: ' + pct + '% — resets in ' + timeStr
     }
   }
@@ -834,6 +1165,10 @@ function unreadBadge(name) {
 async function seedUnreadCounts() {
   var state = loadUiState()
   var map = state.lastViewedAt || {}
+  // Only these hook events count as "something to look at" — tool calls and
+  // user prompts are noise at this level and would push counts into the
+  // hundreds within minutes of a session being active.
+  var UNREAD_HOOK_EVENTS = { Stop: 1, Notification: 1, SessionEnd: 1 }
   for (var i = 0; i < lastSessions.length; i++) {
     var s = lastSessions[i]
     var since = map[s.name] || 0
@@ -842,6 +1177,7 @@ async function seedUnreadCounts() {
       var rows = await r.json()
       var count = 0
       for (var j = 0; j < rows.length; j++) {
+        if (!UNREAD_HOOK_EVENTS[rows[j].hook_event]) continue
         var evTs = new Date(rows[j].ts).getTime()
         if (evTs > since) count++
       }
@@ -862,16 +1198,38 @@ function buildCardContents(s) {
   var st = s.metadata && s.metadata.status ? s.metadata.status : null
   var state = st && st.state ? st.state : 'ended'
 
-  // Header
+  // Header — state pill carries the current tool when working, and
+  // a short "idle 4m" duration otherwise, so "what's this session doing"
+  // reads in one glance instead of scanning multiple lines.
   var header = document.createElement('div')
   header.className = 'card-header'
 
   var pill = document.createElement('span')
   pill.className = 'state-pill ' + stateClass(state)
-  pill.textContent = state
+  if (state === 'working' && st && st.currentTool) {
+    var stateTxt = document.createElement('span')
+    stateTxt.className = 'state-pill-state'
+    stateTxt.textContent = 'working'
+    pill.appendChild(stateTxt)
+    var sep = document.createElement('span')
+    sep.className = 'state-pill-sep'
+    sep.textContent = '·'
+    pill.appendChild(sep)
+    var toolTxt = document.createElement('span')
+    toolTxt.className = 'state-pill-tool'
+    toolTxt.textContent = shortToolName(st.currentTool)
+    toolTxt.title = st.currentTool
+    pill.appendChild(toolTxt)
+  } else if (state === 'idle' && st && st.lastActivity) {
+    pill.textContent = 'idle ' + shortDuration(Date.now() - Date.parse(st.lastActivity))
+  } else if (state === 'ended' && st && st.lastActivity) {
+    pill.textContent = 'ended ' + shortDuration(Date.now() - Date.parse(st.lastActivity)) + ' ago'
+  } else {
+    pill.textContent = state
+  }
   header.appendChild(pill)
 
-  header.appendChild(sourceBadge(sessionSources[s.name]))
+  if (sessionSources[s.name]) header.appendChild(sourceBadge(sessionSources[s.name]))
 
   var hb = hostBadge(s.name)
   if (hb) header.appendChild(hb)
@@ -882,41 +1240,35 @@ function buildCardContents(s) {
   var nameEl = document.createElement('span')
   nameEl.className = 'session-name'
   nameEl.textContent = s.name
+  nameEl.title = s.name
   header.appendChild(nameEl)
+
+  // Bell lives inside the header flex row (with margin-left:auto) so it
+  // can't collide with long session names.
+  var bell = buildBellButton(s.name)
+  header.appendChild(bell)
 
   // Body
   var body = document.createElement('div')
   body.className = 'card-body'
 
-  if (st && st.state === 'working' && st.currentTool) {
-    var toolEl = document.createElement('div')
-    toolEl.className = 'card-tool'
-    toolEl.appendChild(document.createTextNode('running '))
-    var codeEl = document.createElement('code')
-    codeEl.textContent = st.currentTool
-    toolEl.appendChild(codeEl)
-    body.appendChild(toolEl)
+  if (st && st.cwd) {
+    var cwdEl = document.createElement('div')
+    cwdEl.className = 'card-cwd'
+    cwdEl.textContent = shortenPath(st.cwd)
+    cwdEl.title = st.cwd
+    body.appendChild(cwdEl)
   }
 
   if (st && st.lastText) {
     var lastEl = document.createElement('div')
     lastEl.className = 'card-last-text'
-    lastEl.textContent = '\u201c' + st.lastText.slice(0, 60) + '\u201d'
+    lastEl.textContent = '\u201c' + st.lastText.slice(0, 80) + '\u201d'
     body.appendChild(lastEl)
   }
 
   var metaEl = document.createElement('div')
   metaEl.className = 'card-meta'
-
-  if (st && st.contextTokens !== null && st.contextTokens !== undefined) {
-    var effLimit = getEffectiveContextLimit(s.name, st)
-    var pct = Math.round((st.contextTokens / effLimit) * 100)
-    var ctxSpan = document.createElement('span')
-    ctxSpan.className = 'ctx'
-    ctxSpan.textContent =
-      'ctx ' + formatTokens(st.contextTokens) + ' / ' + formatTokens(effLimit) + ' (' + pct + '%)'
-    metaEl.appendChild(ctxSpan)
-  }
 
   if (st && st.model) {
     var modelSpan = document.createElement('span')
@@ -925,17 +1277,91 @@ function buildCardContents(s) {
     metaEl.appendChild(modelSpan)
   }
 
+  // Context-tokens now render as a thin progress bar (color shifts at 70%
+  // and 90%). Only the percent shows inline; exact token counts live in
+  // the tooltip so the bar itself is the glance-signal.
+  var ctxBar = null
+  if (st && st.contextTokens !== null && st.contextTokens !== undefined) {
+    var effLimit = getEffectiveContextLimit(s.name, st)
+    var pct = Math.round((st.contextTokens / effLimit) * 100)
+    var ctxPctSpan = document.createElement('span')
+    ctxPctSpan.className = 'ctx-pct'
+    ctxPctSpan.textContent = 'ctx ' + pct + '%'
+    ctxPctSpan.title =
+      formatTokens(st.contextTokens) + ' / ' + formatTokens(effLimit) + ' tokens (' + pct + '%)'
+    metaEl.appendChild(ctxPctSpan)
+    ctxBar = buildCtxBar(pct)
+  }
+
+  // Active subagents — broadcast-enriched by the aggregator (active_subagents
+  // field on the session row). Show when > 0.
+  var subs = sessionActiveSubagents[s.name] || 0
+  if (subs > 0) {
+    var subSpan = document.createElement('span')
+    subSpan.className = 'card-subagents'
+    subSpan.title = subs + ' active subagent' + (subs === 1 ? '' : 's')
+    subSpan.textContent = '⎇ ' + subs
+    metaEl.appendChild(subSpan)
+  }
+
   body.appendChild(metaEl)
+  if (ctxBar) body.appendChild(ctxBar)
 
   // Sparkline slot — populated async after card is in the DOM
   var sparklineSlot = document.createElement('div')
   sparklineSlot.className = 'card-sparkline'
   body.appendChild(sparklineSlot)
 
-  // Notification bell — absolute-positioned in the top-right of the card
-  var bell = buildBellButton(s.name)
+  // Bell is now part of the header; return null here to keep the old
+  // { header, body, sparklineSlot, bell } shape for callers.
+  return { header: header, body: body, sparklineSlot: sparklineSlot, bell: null }
+}
 
-  return { header: header, body: body, sparklineSlot: sparklineSlot, bell: bell }
+function buildCtxBar(pct) {
+  var wrap = document.createElement('div')
+  wrap.className = 'card-ctx-bar'
+  var fill = document.createElement('div')
+  fill.className = 'card-ctx-bar-fill ' + (pct >= 90 ? 'crit' : pct >= 70 ? 'warn' : 'ok')
+  fill.style.width = Math.min(100, Math.max(0, pct)) + '%'
+  wrap.appendChild(fill)
+  return wrap
+}
+
+// Strip the "mcp__plugin_<server>__" prefix from tool names so long names
+// like "mcp__plugin_discord_discord__reply" render as "discord: reply".
+function shortToolName(name) {
+  if (!name) return ''
+  var m = name.match(/^mcp__(?:plugin_)?([^_]+)(?:_[^_]+)?__(.+)$/)
+  if (m) return m[1] + ': ' + m[2]
+  return name
+}
+
+// Human-readable short duration: 45s, 12m, 3h, 2d.
+function shortDuration(ms) {
+  if (!ms || ms < 0) return ''
+  var s = Math.floor(ms / 1000)
+  if (s < 60) return s + 's'
+  var m = Math.floor(s / 60)
+  if (m < 60) return m + 'm'
+  var h = Math.floor(m / 60)
+  if (h < 48) return h + 'h'
+  var d = Math.floor(h / 24)
+  return d + 'd'
+}
+
+// Shorten an absolute path for compact card display:
+//   /home/claude/projects/x  -> ~/projects/x
+//   /home/claude/a/b/c/d/e   -> .../c/d/e  (deeper than 3 segments)
+function shortenPath(p) {
+  if (!p) return ''
+  var home = '/home/claude'
+  var out = p
+  if (out === home) return '~'
+  if (out.indexOf(home + '/') === 0) out = '~/' + out.slice(home.length + 1)
+  var segs = out.split('/').filter(Boolean)
+  var maxSegs = 3
+  if (segs.length > maxSegs) return '.../' + segs.slice(-maxSegs).join('/')
+  return out
 }
 
 function buildBellButton(sessionName) {
@@ -971,7 +1397,10 @@ function buildSessionCard(s) {
       : s.name
   fetchAndRenderSparkline(sparkId, parts.sparklineSlot)
 
-  card.addEventListener('click', () => openSessionDetail(s.name))
+  card.addEventListener('click', (e) => {
+    if (e.target.closest('.notif-bell')) return
+    openSessionDetail(s.name)
+  })
 
   return card
 }
@@ -1026,6 +1455,34 @@ function handleSessionUpdate(session) {
   if (session.name && session.machine_id) {
     sessionMachines[session.name] = session.machine_id
   }
+  if (session.name && typeof session.active_subagents === 'number') {
+    sessionActiveSubagents[session.name] = session.active_subagents
+  }
+
+  // Patch overview-card state + metadata for this session name. session-delta
+  // only carries online/offline; session-update is the only channel that
+  // carries model / context_tokens / cwd / last_text from the aggregator, so
+  // propagate all of them into the card's status object here.
+  if (session.name) {
+    for (let i = 0; i < lastSessions.length; i++) {
+      if (lastSessions[i].name !== session.name) continue
+      const md = (lastSessions[i].metadata = lastSessions[i].metadata || {})
+      const status = (md.status = md.status || {})
+      if (session.state) status.state = session.state
+      if (session.session_id) status.sessionId = session.session_id
+      if (session.cwd) status.cwd = session.cwd
+      if (session.model) status.model = session.model
+      if (typeof session.context_tokens === 'number') {
+        status.contextTokens = session.context_tokens
+      }
+      if (typeof session.last_text === 'string' && session.last_text) {
+        status.lastText = session.last_text
+      }
+      if (typeof session.last_seen === 'string') status.lastActivity = session.last_seen
+      break
+    }
+    updateOverviewGrid(lastSessions)
+  }
 
   // Live-patch the session detail view when the viewed session receives an update
   if (currentView === 'session-detail' && session && session.name === selectedSessionId) {
@@ -1040,6 +1497,45 @@ function handleSessionUpdate(session) {
     // Also refresh the transcript incrementally — the session update often
     // accompanies new JSONL content (tool calls, responses, etc.).
     renderStream({ incremental: true })
+  }
+}
+
+// Live-inject a user prompt into the session-detail transcript the moment
+// the UserPromptSubmit hook fires, instead of waiting for JSONL poll +
+// transcript refetch. The canonical JSONL entry, when it later arrives,
+// dedupes against this pending entry via the 'user-text:' key (renderStream).
+function handleUserPromptLive(data) {
+  if (!data || !data.session_name || typeof data.prompt !== 'string') return
+  if (currentView !== 'session-detail') return
+  if (data.session_name !== selectedSessionId) return
+  const root = document.getElementById('detail-stream')
+  if (!root) return
+  const textKey = 'user-text:' + data.prompt
+  if (renderedEntryKeys.has(textKey)) return
+  renderedEntryKeys.add(textKey)
+  const entry = {
+    uuid: 'pending:' + (data.session_id || '') + ':' + data.ts,
+    ts: data.ts || new Date().toISOString(),
+    type: 'user',
+    text: data.prompt,
+  }
+  renderedEntryKeys.add(entry.uuid)
+  const wasNearBottom = isNearBottom(root)
+  root.appendChild(renderEntry(entry))
+  if (wasNearBottom) root.scrollTop = root.scrollHeight
+}
+
+// Claude Code API errors (overloaded / rate-limit) don't fire a Stop hook —
+// without this, sessions stay "working" forever. The backend classifies the
+// JSONL record and emits an `api-error` frame; here we notify and bump unread
+// the same way we treat a Stop.
+function handleApiError(data) {
+  if (!data || !data.session_name) return
+  bumpUnread(data.session_name)
+  try {
+    notif.onApiError(data)
+  } catch (err) {
+    console.error('[notifications] onApiError threw', err)
   }
 }
 
@@ -1120,6 +1616,7 @@ function appendEnvelopeToStream(envelope) {
       ts: envelope.ts,
       type: 'user',
       text: envelope.body,
+      attachments: envelope.attachments,
     }
   } else {
     entry = {
@@ -1131,6 +1628,7 @@ function appendEnvelopeToStream(envelope) {
       body: envelope.body,
       callback_id: envelope.callback_id || undefined,
       envelope_type: envelope.type,
+      attachments: envelope.attachments,
     }
   }
   const wasNear = isNearBottom(root)
@@ -1348,6 +1846,31 @@ function renderDetailHeader(session) {
     hostEl.textContent = 'host: ' + session.machine_id.slice(0, 8)
   } else {
     hostEl.textContent = ''
+  }
+
+  // Active subagents for this session (the aggregator enriches session-update
+  // with active_subagents; fall back to the cached per-name count).
+  const subEl = document.getElementById('detail-subagents')
+  if (subEl) {
+    const n =
+      typeof session.active_subagents === 'number'
+        ? session.active_subagents
+        : sessionActiveSubagents[name] || 0
+    subEl.textContent = n > 0 ? '⎇ ' + n + ' subagent' + (n === 1 ? '' : 's') : ''
+  }
+
+  // Last message / tool excerpt — what is the session actually doing right now?
+  const lastEl = document.getElementById('detail-last')
+  if (lastEl) {
+    let snippet = ''
+    if (session.state === 'working' && st && st.currentTool) {
+      snippet = 'running ' + shortToolName(st.currentTool)
+    } else {
+      const txt = session.last_text || (st && st.lastText) || ''
+      if (txt) snippet = '“' + txt.slice(0, 90) + (txt.length > 90 ? '…' : '') + '”'
+    }
+    lastEl.textContent = snippet
+    lastEl.title = snippet
   }
 
   updateDetailBell(session.name || selectedSessionId)
@@ -1570,11 +2093,17 @@ async function renderStream(opts) {
   // Append only missing entries (keyed by uuid, falling back to ts+type).
   // Track the uuid of the last entry appended so future incremental calls
   // can pass ?after_uuid= to skip already-rendered content.
+  // For user entries, also key by text so a live-injected "pending" entry
+  // (from UserPromptSubmit hook) dedupes against the canonical JSONL entry
+  // once the transcript refetch picks it up.
   let appendedCount = 0
   for (const e of entries) {
     const key = e.uuid || e.ts + '|' + e.type + '|' + (e.envelope_id || '')
+    const textKey = e.type === 'user' && e.text ? 'user-text:' + e.text : null
     if (renderedEntryKeys.has(key)) continue
+    if (textKey && renderedEntryKeys.has(textKey)) continue
     renderedEntryKeys.add(key)
+    if (textKey) renderedEntryKeys.add(textKey)
     root.appendChild(renderEntry(e))
     appendedCount++
     // Update the incremental cursor to the newest entry's uuid.
@@ -1604,6 +2133,9 @@ function renderEntry(e) {
   if (e.type === 'user') {
     appendLabel(wrap, 'you:')
     appendMarkdownBody(wrap, e.text || '')
+    if (Array.isArray(e.attachments) && e.attachments.length > 0) {
+      wrap.appendChild(renderAttachments(e.attachments))
+    }
   } else if (e.type === 'assistant-text') {
     appendLabel(wrap, 'assistant:')
     appendMarkdownBody(wrap, e.text || '')
@@ -1811,24 +2343,206 @@ function appendPartyLineEntry(wrap, e) {
     renderMarkdownInto(body, e.body)
     block.appendChild(body)
   }
+  if (Array.isArray(e.attachments) && e.attachments.length > 0) {
+    block.appendChild(renderAttachments(e.attachments))
+  }
   wrap.appendChild(block)
+}
+
+// --- Attachments: render + send-form handling ---
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB'
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB'
+}
+
+function renderAttachments(atts) {
+  const wrap = document.createElement('div')
+  wrap.className = 'entry-attachments'
+  for (const a of atts) {
+    if (a.kind === 'image') {
+      const img = document.createElement('img')
+      img.className = 'entry-att-image'
+      img.src = a.url
+      img.alt = a.name
+      img.title = a.name + ' (' + formatFileSize(a.size) + ')'
+      img.addEventListener('click', () => openLightbox(a))
+      wrap.appendChild(img)
+    } else {
+      const link = document.createElement('a')
+      link.className = 'entry-att-file'
+      link.href = a.url
+      link.download = a.name
+      link.rel = 'noopener'
+      const icon = document.createElement('span')
+      icon.className = 'att-icon'
+      icon.textContent = '📎'
+      const name = document.createElement('span')
+      name.textContent = a.name
+      const size = document.createElement('span')
+      size.className = 'att-size'
+      size.textContent = formatFileSize(a.size)
+      link.appendChild(icon)
+      link.appendChild(name)
+      link.appendChild(size)
+      wrap.appendChild(link)
+    }
+  }
+  return wrap
+}
+
+function openLightbox(att) {
+  const lb = document.getElementById('lightbox')
+  const img = document.getElementById('lightbox-img')
+  const dl = document.getElementById('lightbox-download')
+  if (!lb || !img || !dl) return
+  img.src = att.url
+  img.alt = att.name || ''
+  dl.href = att.url
+  dl.setAttribute('download', att.name || '')
+  lb.hidden = false
+}
+function closeLightbox() {
+  const lb = document.getElementById('lightbox')
+  if (!lb) return
+  lb.hidden = true
+  const img = document.getElementById('lightbox-img')
+  if (img) img.src = ''
+}
+;(function wireLightbox() {
+  document.getElementById('lightbox-close')?.addEventListener('click', closeLightbox)
+  document.getElementById('lightbox')?.addEventListener('click', (e) => {
+    if (e.target && e.target.id === 'lightbox') closeLightbox()
+  })
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !document.getElementById('lightbox')?.hidden) closeLightbox()
+  })
+})()
+
+// Pending attachments per send-form. Each is { id, name, size, kind, media_type, url, objectUrl?, status }.
+let pendingAttachments = []
+
+function renderAttachChips() {
+  const wrap = document.getElementById('detail-attach-chips')
+  if (!wrap) return
+  wrap.replaceChildren()
+  if (pendingAttachments.length === 0) {
+    wrap.hidden = true
+    return
+  }
+  wrap.hidden = false
+  for (const p of pendingAttachments) {
+    const chip = document.createElement('span')
+    chip.className =
+      'attach-chip' +
+      (p.status === 'uploading' ? ' uploading' : '') +
+      (p.status === 'error' ? ' errored' : '')
+    if (p.kind === 'image' && (p.objectUrl || p.url)) {
+      const img = document.createElement('img')
+      img.src = p.objectUrl || p.url
+      img.alt = ''
+      chip.appendChild(img)
+    }
+    const name = document.createElement('span')
+    name.className = 'attach-name'
+    name.textContent = p.name
+    chip.appendChild(name)
+    const size = document.createElement('span')
+    size.className = 'attach-size'
+    size.textContent = p.status === 'uploading' ? '…' : formatFileSize(p.size)
+    chip.appendChild(size)
+    const x = document.createElement('button')
+    x.type = 'button'
+    x.className = 'attach-chip-x'
+    x.textContent = '×'
+    x.addEventListener('click', () => {
+      pendingAttachments = pendingAttachments.filter((q) => q !== p)
+      if (p.objectUrl) URL.revokeObjectURL(p.objectUrl)
+      renderAttachChips()
+    })
+    chip.appendChild(x)
+    wrap.appendChild(chip)
+  }
+}
+
+async function uploadPending(file) {
+  const localId = Math.random().toString(36).slice(2)
+  const placeholder = {
+    localId,
+    id: null,
+    name: file.name || 'pasted-image',
+    size: file.size,
+    media_type: file.type || 'application/octet-stream',
+    kind: (file.type || '').startsWith('image/') ? 'image' : 'file',
+    objectUrl: URL.createObjectURL(file),
+    url: null,
+    status: 'uploading',
+  }
+  pendingAttachments.push(placeholder)
+  renderAttachChips()
+  try {
+    const form = new FormData()
+    form.append('file', file, placeholder.name)
+    const res = await fetch('/api/upload', { method: 'POST', body: form })
+    if (!res.ok) throw new Error('upload failed: ' + res.status)
+    const meta = await res.json()
+    placeholder.id = meta.id
+    placeholder.url = meta.url
+    placeholder.kind = meta.kind
+    placeholder.media_type = meta.media_type
+    placeholder.size = meta.size
+    placeholder.status = 'ready'
+  } catch (err) {
+    placeholder.status = 'error'
+    console.error('[attach] upload failed', err)
+  } finally {
+    renderAttachChips()
+  }
+}
+
+function addFiles(fileList) {
+  for (const f of Array.from(fileList)) {
+    if (pendingAttachments.length >= 5) {
+      console.warn('[attach] max 5 attachments; ignoring', f.name)
+      break
+    }
+    uploadPending(f)
+  }
 }
 
 function doDetailSend() {
   if (!selectedSessionId) return
   const textarea = document.getElementById('detail-send-msg')
   const msg = textarea.value.trim()
-  if (!msg) return
+  const readyAtts = pendingAttachments.filter((p) => p.status === 'ready' && p.id)
+  if (!msg && readyAtts.length === 0) return
+  const uploading = pendingAttachments.some((p) => p.status === 'uploading')
+  if (uploading) {
+    // Let the upload finish first — user can retry Send.
+    console.warn('[detail-send] waiting for uploads')
+    return
+  }
+  const payload = {
+    to: selectedSessionId,
+    message: msg,
+    type: 'message',
+    attachment_ids: readyAtts.map((p) => p.id),
+  }
   fetch('/api/send', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ to: selectedSessionId, message: msg, type: 'message' }),
+    body: JSON.stringify(payload),
   }).catch(function (err) {
     console.error('[detail-send] send failed', err)
   })
   textarea.value = ''
   autosizeDetailSend()
   textarea.focus()
+  // Clear chips (revoke object URLs).
+  for (const p of pendingAttachments) if (p.objectUrl) URL.revokeObjectURL(p.objectUrl)
+  pendingAttachments = []
+  renderAttachChips()
 }
 
 // Auto-resize the session send textarea up to ~4 lines, then scroll.
@@ -1853,6 +2567,62 @@ function autosizeDetailSend() {
       doDetailSend()
     }
   })
+
+  // File picker
+  const btn = document.getElementById('detail-attach-btn')
+  const input = document.getElementById('detail-attach-input')
+  if (btn && input) {
+    btn.addEventListener('click', () => input.click())
+    input.addEventListener('change', () => {
+      if (input.files && input.files.length > 0) addFiles(input.files)
+      input.value = ''
+    })
+  }
+
+  // Paste: intercept clipboard items that are files (screenshot, copied image, etc.)
+  ta.addEventListener('paste', (e) => {
+    const items = e.clipboardData?.items
+    if (!items) return
+    const files = []
+    for (const it of items)
+      if (it.kind === 'file') {
+        const f = it.getAsFile()
+        if (f) files.push(f)
+      }
+    if (files.length > 0) {
+      e.preventDefault()
+      addFiles(files)
+    }
+  })
+
+  // Drag-and-drop onto the send form
+  const form = document.getElementById('detail-send')
+  if (form) {
+    let depth = 0
+    const enter = (e) => {
+      if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return
+      e.preventDefault()
+      depth++
+      form.classList.add('drop-target')
+    }
+    const leave = () => {
+      depth = Math.max(0, depth - 1)
+      if (depth === 0) form.classList.remove('drop-target')
+    }
+    form.addEventListener('dragenter', enter)
+    form.addEventListener('dragover', (e) => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'))
+        e.preventDefault()
+    })
+    form.addEventListener('dragleave', leave)
+    form.addEventListener('drop', (e) => {
+      e.preventDefault()
+      depth = 0
+      form.classList.remove('drop-target')
+      const files = e.dataTransfer?.files
+      if (files && files.length > 0) addFiles(files)
+    })
+  }
 })()
 
 // --- History view ---
@@ -2210,7 +2980,8 @@ function updateBellUIEverywhere(session) {
   const on = notif.isEnabled(session)
   const state = notif.getPermissionState()
   const disabled = state !== 'granted'
-  const sel = `.notif-bell[data-session="${CSS.escape(session)}"]`
+  const esc = CSS.escape(session)
+  const sel = `.notif-bell[data-session="${esc}"], .notif-bell-detail[data-session="${esc}"]`
   document.querySelectorAll(sel).forEach((bell) => {
     bell.classList.toggle('notif-bell-on', on)
     bell.classList.toggle('notif-bell-off', !on)

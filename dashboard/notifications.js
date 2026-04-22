@@ -179,6 +179,14 @@ export function createNotifications(deps) {
       if (!frame || !frame.session) return
       await dismissByTag(frame.session)
     },
+    async onApiError(frame) {
+      if (!frame || !frame.session_name) return
+      if (!shouldFire(frame.session_name)) return
+      const title = frame.session_name + ' — API error'
+      const status = frame.status ? ' (' + frame.status + ')' : ''
+      const body = (frame.message || 'Anthropic API error') + status
+      await fire(frame.session_name, title, body)
+    },
     dispatchSessionViewed(sessionName) {
       if (!sessionName) return
       deps.sendWsFrame({ type: 'session-viewed', session: sessionName })

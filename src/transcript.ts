@@ -35,6 +35,7 @@ export interface TranscriptEntry {
   body?: string
   callback_id?: string
   envelope_type?: 'message' | 'request' | 'response'
+  attachments?: import('./types.js').Attachment[]
 }
 
 export interface PartyLineEnvelope {
@@ -46,6 +47,7 @@ export interface PartyLineEnvelope {
   ts: string
   callback_id?: string | null
   response_to?: string | null
+  attachments?: import('./types.js').Attachment[]
 }
 
 export interface BuildTranscriptOptions {
@@ -231,9 +233,10 @@ function resolveSpawnAgentId(
     if (!match) continue
     const agentId = match[1]!
     try {
-      const meta = JSON.parse(
-        readFileSync(join(subagentsDir, filename), 'utf-8'),
-      ) as { agentType?: string; description?: string }
+      const meta = JSON.parse(readFileSync(join(subagentsDir, filename), 'utf-8')) as {
+        agentType?: string
+        description?: string
+      }
       if (meta.agentType !== subagentType) continue
       if (description !== undefined && meta.description !== description) continue
       return agentId
@@ -254,13 +257,7 @@ function loadAgentMeta(
   sessionId: string,
   agentId: string,
 ): { agentType?: string; description?: string } {
-  const metaPath = join(
-    projectsRoot,
-    cwdSlug,
-    sessionId,
-    'subagents',
-    `agent-${agentId}.meta.json`,
-  )
+  const metaPath = join(projectsRoot, cwdSlug, sessionId, 'subagents', `agent-${agentId}.meta.json`)
   try {
     return JSON.parse(readFileSync(metaPath, 'utf-8')) as {
       agentType?: string
@@ -324,7 +321,10 @@ function recordToEntries(
         } else if (blk.type === 'text') {
           // Same safety net for array-shaped content: <system-reminder>-only
           // text blocks are synthetic injections, not user input.
-          if (isSystemReminderString(blk.text)) { blockIdx++; continue }
+          if (isSystemReminderString(blk.text)) {
+            blockIdx++
+            continue
+          }
           entries.push({ uuid: entryUuid(blockIdx), ts, type: 'user', text: blk.text })
         }
         blockIdx++
@@ -341,16 +341,8 @@ function recordToEntries(
           const input = blk.input as { subagent_type?: string; prompt?: string }
           const subagentType = input.subagent_type ?? ''
           const desc = input.prompt
-          const agentId = resolveSpawnAgentId(
-            projectsRoot,
-            cwdSlug,
-            sessionId,
-            subagentType,
-            desc,
-          )
-          const meta = agentId
-            ? loadAgentMeta(projectsRoot, cwdSlug, sessionId, agentId)
-            : {}
+          const agentId = resolveSpawnAgentId(projectsRoot, cwdSlug, sessionId, subagentType, desc)
+          const meta = agentId ? loadAgentMeta(projectsRoot, cwdSlug, sessionId, agentId) : {}
           entries.push({
             uuid: entryUuid(blockIdx),
             ts,
@@ -412,9 +404,18 @@ export function buildTranscript(opts: BuildTranscriptOptions): TranscriptEntry[]
           other_session: env.to,
           body: env.body,
           callback_id: env.callback_id ?? undefined,
-          envelope_type: (env.type as 'message' | 'request' | 'response'),
+          envelope_type: env.type as 'message' | 'request' | 'response',
+          ...(env.attachments && env.attachments.length > 0
+            ? { attachments: env.attachments }
+            : {}),
         })
-      } else if (env.to === name || env.to.split(',').map((s) => s.trim()).includes(name)) {
+      } else if (
+        env.to === name ||
+        env.to
+          .split(',')
+          .map((s) => s.trim())
+          .includes(name)
+      ) {
         entries.push({
           uuid: env.id,
           ts: env.ts,
@@ -423,7 +424,10 @@ export function buildTranscript(opts: BuildTranscriptOptions): TranscriptEntry[]
           other_session: env.from,
           body: env.body,
           callback_id: env.callback_id ?? undefined,
-          envelope_type: (env.type as 'message' | 'request' | 'response'),
+          envelope_type: env.type as 'message' | 'request' | 'response',
+          ...(env.attachments && env.attachments.length > 0
+            ? { attachments: env.attachments }
+            : {}),
         })
       }
     }

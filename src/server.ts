@@ -10,8 +10,9 @@
  * the `PARTY_LINE_TOKEN` env var authenticates the connection.
  */
 
-import { basename } from 'node:path'
-import { readFileSync } from 'fs'
+import { basename, extname, join } from 'node:path'
+import { homedir } from 'node:os'
+import { readFileSync, statSync, writeFileSync, mkdirSync } from 'fs'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
@@ -21,7 +22,7 @@ import { generateId, generateCallbackId } from './protocol.js'
 import { getSessionStatus } from './introspect.js'
 import { createPermissionBridge } from './permission-bridge.js'
 import { getMachineId } from './machine-id.js'
-import type { Envelope, MessageType } from './types.js'
+import type { Attachment, Envelope, MessageType } from './types.js'
 
 // --- Session name resolution ---
 
@@ -101,12 +102,143 @@ function recordMessage(envelope: Envelope): void {
 
 const PARTY_LINE_VERSION = '0.1.0'
 const SWITCHBOARD_URL = process.env.PARTY_LINE_SWITCHBOARD_URL || 'wss://localhost:3400/ws/session'
-const token = process.env.PARTY_LINE_TOKEN || null
+
+// Claude CLI does not reliably propagate env to MCP server children, so fall
+// back to reading the token from the canonical session-token file written by
+// `ccpl new <name>`.
+function readTokenFromFile(name: string): string | null {
+  try {
+    const path = join(homedir(), '.config', 'party-line', 'sessions', `${name}.token`)
+    const raw = readFileSync(path, 'utf8').trim()
+    return raw || null
+  } catch {
+    return null
+  }
+}
+
+const token = process.env.PARTY_LINE_TOKEN || readTokenFromFile(sessionName)
 
 function ccplBaseUrl(): string {
   return SWITCHBOARD_URL.replace(/^wss?:\/\//, (m) =>
     m === 'wss://' ? 'https://' : 'http://',
   ).replace(/\/ws\/.*$/, '')
+}
+
+// --- Attachment support ---
+//
+// Agents attach files to outbound messages by path. This plugin uploads
+// each file to the dashboard's /api/upload endpoint and attaches the
+// returned metadata to the envelope. Incoming envelopes with attachments
+// are announced in the <channel> notification; agents fetch on demand
+// via party_line_download_attachment (matches Discord's UX).
+
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024 // 20 MB per file
+const MAX_ATTACHMENTS_PER_MESSAGE = 5
+const MIME_BY_EXT: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.json': 'application/json',
+  '.csv': 'text/csv',
+  '.log': 'text/plain',
+  '.zip': 'application/zip',
+}
+
+function guessMediaType(path: string): string {
+  return MIME_BY_EXT[extname(path).toLowerCase()] ?? 'application/octet-stream'
+}
+
+/**
+ * Upload a set of local files to the dashboard's attachment store.
+ * Returns metadata the caller attaches to the envelope.
+ */
+async function uploadAttachments(paths: string[]): Promise<Attachment[]> {
+  if (paths.length === 0) return []
+  if (paths.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+    throw new Error(
+      `Too many files (${paths.length}); max ${MAX_ATTACHMENTS_PER_MESSAGE} per message.`,
+    )
+  }
+  if (!token) throw new Error('PARTY_LINE_TOKEN not set — cannot upload.')
+  const out: Attachment[] = []
+  for (const p of paths) {
+    let st
+    try {
+      st = statSync(p)
+    } catch {
+      throw new Error(`File not found: ${p}`)
+    }
+    if (!st.isFile()) throw new Error(`Not a file: ${p}`)
+    if (st.size > MAX_ATTACHMENT_BYTES) {
+      const mb = (st.size / 1024 / 1024).toFixed(1)
+      throw new Error(`File too large: ${p} (${mb}MB, max ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB)`)
+    }
+    const bytes = readFileSync(p)
+    const media_type = guessMediaType(p)
+    const form = new FormData()
+    const blob = new Blob([bytes], { type: media_type })
+    form.append('file', blob, basename(p))
+    form.append('media_type', media_type)
+    const res = await fetch(ccplBaseUrl() + '/api/upload', {
+      method: 'POST',
+      headers: { 'X-Party-Line-Token': token },
+      body: form,
+    })
+    if (!res.ok) {
+      throw new Error(`Upload failed for ${p}: ${res.status} ${await res.text()}`)
+    }
+    const meta = (await res.json()) as Attachment
+    out.push(meta)
+  }
+  return out
+}
+
+/** Parse + validate the `files` arg shared by send / request / respond tools. */
+function parseFilesArg(args: Record<string, unknown> | undefined): string[] {
+  const raw = args?.files
+  if (raw === undefined || raw === null) return []
+  if (!Array.isArray(raw)) throw new Error('"files" must be an array of absolute paths.')
+  return raw.map((p) => {
+    if (typeof p !== 'string' || !p) throw new Error('"files" entries must be non-empty strings.')
+    if (!p.startsWith('/')) throw new Error(`"files" entries must be absolute paths: ${p}`)
+    return p
+  })
+}
+
+/** Save an attachment to the inbox dir and return the local file path. */
+async function downloadAttachmentToInbox(att: Attachment): Promise<string> {
+  if (!token) throw new Error('PARTY_LINE_TOKEN not set — cannot download.')
+  const url = att.url.startsWith('http') ? att.url : ccplBaseUrl() + att.url
+  // Mirror ws-client: localhost HTTPS uses a self-signed cert and
+  // NODE_TLS_REJECT_UNAUTHORIZED does not propagate from the claude CLI.
+  const isLocalhostHttps = (() => {
+    try {
+      const u = new URL(url)
+      if (u.protocol !== 'https:') return false
+      return u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '::1'
+    } catch {
+      return false
+    }
+  })()
+  const fetchOpts: RequestInit & { tls?: { rejectUnauthorized: boolean } } = {
+    headers: { 'X-Party-Line-Token': token },
+  }
+  if (isLocalhostHttps) fetchOpts.tls = { rejectUnauthorized: false }
+  const res = await fetch(url, fetchOpts)
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`)
+  const buf = Buffer.from(await res.arrayBuffer())
+  const inboxDir = join(homedir(), '.config', 'party-line', 'inbox')
+  mkdirSync(inboxDir, { recursive: true })
+  const safeName = att.name.replace(/[^a-zA-Z0-9._-]/g, '_') || att.id
+  const out = join(inboxDir, `${att.id}-${safeName}`)
+  writeFileSync(out, buf)
+  return out
 }
 
 // Best-effort machine_id for the hello payload (ignore failures).
@@ -126,7 +258,9 @@ function currentCcUuid(): string | null {
 const ws = token
   ? createWsClient({
       url: SWITCHBOARD_URL,
-      helloPayload: {
+      // Factory form: regenerate on every (re)connect so cc_session_uuid
+      // reflects the latest JSONL, not whatever was visible at module load.
+      helloPayload: () => ({
         type: 'hello',
         token,
         name: sessionName,
@@ -134,7 +268,7 @@ const ws = token
         pid: process.pid,
         machine_id: machineId,
         version: PARTY_LINE_VERSION,
-      },
+      }),
       logger: (lvl, msg) => {
         if (lvl === 'error' || DEBUG) {
           process.stderr.write(`[party-line:ws:${lvl}] ${msg}\n`)
@@ -171,10 +305,15 @@ const mcp = new Server(
       `- If type="response": a reply to a request you sent earlier. Use the content as you need.`,
       `- Broadcasts (to="all") never require a reply.`,
       ``,
+      `Attachments: if an inbound <channel> tag has attachment_count, the meta's attachments attribute lists "<id>:<name> (<type>, <size>KB); ..." entries. Call party_line_download_attachment(attachment_id) to fetch a file to the local inbox — only do this when you actually need the file contents (images, logs, etc.). The notification does not auto-download, matching how our Discord channel works.`,
+      ``,
+      `Sending attachments: party_line_send and party_line_respond both accept an optional files: ["/abs/path.png", ...] array. If you generated a chart, rendered an image, or located a file the user asked about, attaching the file IS a valid response — you don't need to describe it in the message body. Max 5 files, 20MB each.`,
+      ``,
       `Available tools:`,
-      `- party_line_send: Send a message to another session by name (or "all" for broadcast). Fire-and-forget.`,
+      `- party_line_send: Send a message to another session by name (or "all" for broadcast). Optional files: [paths].`,
       `- party_line_request: Send a request and expect a response. Returns a callback_id so the other end can reply.`,
-      `- party_line_respond: Reply to a request using its callback_id (REQUIRED when you receive a type=request).`,
+      `- party_line_respond: Reply to a request using its callback_id (REQUIRED when you receive a type=request). Optional files: [paths].`,
+      `- party_line_download_attachment: Fetch an attachment from a received message to the local inbox.`,
       `- party_line_list_sessions: See which sessions are currently connected.`,
       `- party_line_history: View recent messages on the bus.`,
     ].join('\n'),
@@ -239,6 +378,7 @@ interface InboundEnvelopeFrame {
   body: string | null
   callback_id: string | null
   response_to: string | null
+  attachments?: Attachment[]
 }
 
 function handleInbound(envelope: Envelope): void {
@@ -278,13 +418,43 @@ function handleInbound(envelope: Envelope): void {
   if (envelope.callback_id) meta.callback_id = envelope.callback_id
   if (envelope.response_to) meta.response_to = envelope.response_to
 
+  // Attachments: announce in meta + append a one-line summary to the body
+  // so the model notices. Fetch is on-demand via party_line_download_attachment,
+  // matching Discord's pattern (no auto-download of images).
+  let bodyWithAtt = envelope.body
+  if (envelope.attachments && envelope.attachments.length > 0) {
+    meta.attachment_count = String(envelope.attachments.length)
+    meta.attachments = envelope.attachments
+      .map((a) => {
+        const kb = (a.size / 1024).toFixed(0)
+        const safe = a.name.replace(/[\[\]\r\n;]/g, '_')
+        return `${a.id}:${safe} (${a.media_type}, ${kb}KB)`
+      })
+      .join('; ')
+    if (!bodyWithAtt) bodyWithAtt = '(attachment)'
+  }
+
   void mcp.notification({
     method: 'notifications/claude/channel',
     params: {
-      content: envelope.body,
+      content: bodyWithAtt,
       meta,
     },
   })
+}
+
+// Cache attachments from inbound envelopes so party_line_download_attachment
+// can resolve an id → url without a separate lookup. Bounded to ~200 entries
+// to keep memory flat on long-running sessions.
+const attachmentCache = new Map<string, Attachment>()
+function rememberAttachments(atts: Attachment[] | undefined): void {
+  if (!atts) return
+  for (const a of atts) attachmentCache.set(a.id, a)
+  while (attachmentCache.size > 200) {
+    const k = attachmentCache.keys().next().value
+    if (!k) break
+    attachmentCache.delete(k)
+  }
 }
 
 ws?.on('envelope', (frame: InboundEnvelopeFrame) => {
@@ -299,7 +469,9 @@ ws?.on('envelope', (frame: InboundEnvelopeFrame) => {
     callback_id: frame.callback_id,
     response_to: frame.response_to,
     ts: new Date(frame.ts).toISOString(),
+    attachments: frame.attachments,
   }
+  rememberAttachments(adapted.attachments)
   handleInbound(adapted)
 })
 
@@ -324,7 +496,8 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'party_line_send',
-      description: 'Send a message to another Claude Code session by name. Use "all" to broadcast.',
+      description:
+        'Send a message to another Claude Code session by name. Use "all" to broadcast. Optionally attach local files (images, logs, PDFs, etc.) by absolute path — if you generated a chart or located an image, the attachment IS a valid response even when the message body is short or empty.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -334,10 +507,16 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           message: {
             type: 'string',
-            description: 'The message body',
+            description: 'The message body (may be empty if you are only sending attachments)',
+          },
+          files: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Absolute file paths to attach. Max 5 files, 20MB each. Images (png/jpg/gif/webp/svg) render inline for the recipient.',
           },
         },
-        required: ['to', 'message'],
+        required: ['to'],
       },
     },
     {
@@ -361,7 +540,8 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'party_line_respond',
-      description: 'Respond to a request from another session (matches by callback_id).',
+      description:
+        'Respond to a request from another session (matches by callback_id). Attach local files (images, logs, PDFs) via the optional files param — a generated chart or located image can be the entire response without any message text.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -375,10 +555,31 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           message: {
             type: 'string',
-            description: 'The response body',
+            description: 'The response body (may be empty if you are only sending attachments)',
+          },
+          files: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Absolute file paths to attach. Max 5 files, 20MB each. Images render inline for the recipient.',
           },
         },
-        required: ['callback_id', 'to', 'message'],
+        required: ['callback_id', 'to'],
+      },
+    },
+    {
+      name: 'party_line_download_attachment',
+      description:
+        'Download an attachment from a received party-line message to the local inbox. Use after seeing an attachment listed in a <channel> notification meta. Returns the local file path ready to Read.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          attachment_id: {
+            type: 'string',
+            description: 'Attachment id from the meta.attachments listing.',
+          },
+        },
+        required: ['attachment_id'],
       },
     },
     {
@@ -439,8 +640,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
     case 'party_line_send': {
       const to = String(args?.to ?? '')
       const message = String(args?.message ?? '')
-      if (!to || !message) {
-        return { content: [{ type: 'text', text: 'Error: "to" and "message" are required.' }] }
+      let files: string[]
+      try {
+        files = parseFilesArg(args as Record<string, unknown> | undefined)
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }] }
+      }
+      if (!to) {
+        return { content: [{ type: 'text', text: 'Error: "to" is required.' }] }
+      }
+      if (!message && files.length === 0) {
+        return {
+          content: [{ type: 'text', text: 'Error: provide a "message", "files", or both.' }],
+        }
       }
       if (!ws) {
         return {
@@ -456,6 +668,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: 'text', text: 'Error: switchboard unreachable.' }] }
       }
 
+      let atts: Attachment[] = []
+      try {
+        atts = await uploadAttachments(files)
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Upload failed: ${(err as Error).message}` }] }
+      }
+
       const clientRef = generateId()
       ws.send({
         type: 'send',
@@ -463,8 +682,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
         frame_type: 'message',
         body: message,
         client_ref: clientRef,
+        ...(atts.length > 0 ? { attachments: atts } : {}),
       })
-      // Optimistic local history entry so party_line_history reflects sends.
       recordMessage({
         id: clientRef,
         from: sessionName,
@@ -474,10 +693,17 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
         callback_id: null,
         response_to: null,
         ts: new Date().toISOString(),
+        ...(atts.length > 0 ? { attachments: atts } : {}),
       })
-      debug(`send: to=${to} client_ref=${clientRef}`)
+      debug(`send: to=${to} client_ref=${clientRef} attachments=${atts.length}`)
+      const attSummary = atts.length > 0 ? ` + ${atts.length} attachment(s)` : ''
       return {
-        content: [{ type: 'text', text: `Sent message to "${to}" (client_ref: ${clientRef}).` }],
+        content: [
+          {
+            type: 'text',
+            text: `Sent message to "${to}"${attSummary} (client_ref: ${clientRef}).`,
+          },
+        ],
       }
     }
 
@@ -536,11 +762,20 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
       const callbackId = String(args?.callback_id ?? '')
       const to = String(args?.to ?? '')
       const message = String(args?.message ?? '')
-      if (!callbackId || !to || !message) {
+      let files: string[]
+      try {
+        files = parseFilesArg(args as Record<string, unknown> | undefined)
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Error: ${(err as Error).message}` }] }
+      }
+      if (!callbackId || !to) {
         return {
-          content: [
-            { type: 'text', text: 'Error: "callback_id", "to", and "message" are required.' },
-          ],
+          content: [{ type: 'text', text: 'Error: "callback_id" and "to" are required.' }],
+        }
+      }
+      if (!message && files.length === 0) {
+        return {
+          content: [{ type: 'text', text: 'Error: provide a "message", "files", or both.' }],
         }
       }
       if (!ws) {
@@ -557,6 +792,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: 'text', text: 'Error: switchboard unreachable.' }] }
       }
 
+      let atts: Attachment[] = []
+      try {
+        atts = await uploadAttachments(files)
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Upload failed: ${(err as Error).message}` }] }
+      }
+
       const clientRef = generateId()
       ws.send({
         type: 'respond',
@@ -566,6 +808,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
         callback_id: callbackId,
         response_to: callbackId,
         client_ref: clientRef,
+        ...(atts.length > 0 ? { attachments: atts } : {}),
       })
       recordMessage({
         id: clientRef,
@@ -576,9 +819,39 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
         callback_id: callbackId,
         response_to: callbackId,
         ts: new Date().toISOString(),
+        ...(atts.length > 0 ? { attachments: atts } : {}),
       })
-      debug(`respond: to=${to} callback=${callbackId} client_ref=${clientRef}`)
-      return { content: [{ type: 'text', text: `Response sent to "${to}".` }] }
+      debug(
+        `respond: to=${to} callback=${callbackId} client_ref=${clientRef} attachments=${atts.length}`,
+      )
+      const attSummary = atts.length > 0 ? ` + ${atts.length} attachment(s)` : ''
+      return { content: [{ type: 'text', text: `Response sent to "${to}"${attSummary}.` }] }
+    }
+
+    case 'party_line_download_attachment': {
+      const id = String(args?.attachment_id ?? '')
+      if (!id) {
+        return { content: [{ type: 'text', text: 'Error: "attachment_id" is required.' }] }
+      }
+      const cached = attachmentCache.get(id)
+      // Reconstruct minimal metadata if not cached (download endpoint only
+      // needs id + name).
+      const meta: Attachment = cached ?? {
+        id,
+        kind: 'file',
+        name: id,
+        media_type: 'application/octet-stream',
+        size: 0,
+        url: `/api/attachment/${id}`,
+      }
+      try {
+        const path = await downloadAttachmentToInbox(meta)
+        return {
+          content: [{ type: 'text', text: `Downloaded: ${path}` }],
+        }
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Download failed: ${(err as Error).message}` }] }
+      }
     }
 
     case 'party_line_list_sessions': {
@@ -669,7 +942,7 @@ function startUuidWatcher(): void {
         }
       }
     }
-  }, 30_000)
+  }, 10_000)
 }
 
 // --- Shutdown ---

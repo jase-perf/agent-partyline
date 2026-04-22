@@ -42,7 +42,7 @@ describe('storage', () => {
     const db = openDb(TEST_PATH)
     const row = db.query<{ user_version: number }, []>('PRAGMA user_version').get()
     expect(row?.user_version).toBe(SCHEMA_VERSION)
-    expect(row?.user_version).toBe(4)
+    expect(row?.user_version).toBe(5)
     db.close()
   })
 

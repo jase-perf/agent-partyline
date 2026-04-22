@@ -17,18 +17,37 @@ import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join, dirname, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { startQuotaPoller, stopQuotaPoller, getQuota } from './quota.js'
-import { validatePermissionResponseBody, buildPermissionResponseEnvelope } from './serve-helpers.js'
+import {
+  validatePermissionResponseBody,
+  buildPermissionResponseEnvelope,
+  buildUserPromptFrame,
+  classifyApiError,
+} from './serve-helpers.js'
+import { upsertSession } from '../src/storage/queries.js'
 import { openDb } from '../src/storage/db.js'
 import { Aggregator } from '../src/aggregator.js'
+import type { Database } from 'bun:sqlite'
 import { handleIngest } from '../src/ingest/http.js'
 import { loadOrCreateToken } from '../src/ingest/auth.js'
 import { getMachineId } from '../src/machine-id.js'
 import { JsonlObserver } from '../src/observers/jsonl.js'
 import { GeminiTranscriptObserver } from '../src/observers/gemini-transcript.js'
 import { recentEvents } from '../src/storage/queries.js'
-import { listSessions as listCcplSessions } from '../src/storage/ccpl-queries.js'
+import {
+  listSessions as listCcplSessions,
+  getSessionByName as getCcplSessionByName,
+  getSessionByToken as getCcplSessionByToken,
+} from '../src/storage/ccpl-queries.js'
+import {
+  insertAttachment,
+  getAttachment,
+  linkAttachmentsToEnvelope,
+  attachmentRowToMeta,
+} from '../src/storage/attachments.js'
+import type { Attachment } from '../src/types.js'
+import { randomBytes } from 'node:crypto'
 import { buildTranscript, filterAfterUuid } from '../src/transcript.js'
-import { pruneOldEvents } from '../src/storage/retention.js'
+import { pruneOldEvents, pruneExpiredAttachments } from '../src/storage/retention.js'
 import { rollupDailyMetrics, hourlyToolCalls } from '../src/storage/metrics.js'
 import {
   verifyPassword,
@@ -49,6 +68,9 @@ import {
   handleCcplArchive,
   handleCcplList,
   handleCcplCleanup,
+  handleDashboardArchive,
+  handleDashboardRemove,
+  defaultDeleteTokenFile,
 } from '../src/server/ccpl-api.js'
 import { createSwitchboard } from '../src/server/switchboard.js'
 
@@ -109,14 +131,213 @@ const aggregator = new Aggregator(db)
 const switchboard = createSwitchboard(db)
 
 aggregator.onUpdate((session) => {
-  switchboard.broadcastObserverFrame({ type: 'session-update', data: session })
+  // Enrich the broadcast session row with live active-subagent count so the
+  // dashboard card can show "+N subagents" without a separate fetch.
+  const row = db
+    .query<
+      { n: number },
+      { $s: string }
+    >("SELECT count(*) AS n FROM subagents WHERE session_id = $s AND status = 'running'")
+    .get({ $s: session.session_id })
+  const activeSubagents = row ? row.n : 0
+  switchboard.broadcastObserverFrame({
+    type: 'session-update',
+    data: { ...session, active_subagents: activeSubagents },
+  })
 })
 
 const jsonlObserver = new JsonlObserver(
   join(process.env.HOME ?? '/home/claude', '.claude', 'projects'),
 )
+/**
+ * Pull model + usage + last assistant text out of a JSONL assistant record
+ * and upsert into the aggregator's sessions table. Claude Code hook
+ * payloads don't include model/usage, but the JSONL does. Without this,
+ * cards stay blank on model/ctx.
+ *
+ * Emits a `session-update` observer frame only when model or context_tokens
+ * actually changed, to avoid chattiness from the 500ms polling observer.
+ */
+function harvestAssistantMetadata(
+  db: Database,
+  agg: Aggregator,
+  sb: ReturnType<typeof createSwitchboard>,
+  u: { session_id: string; file_path: string; entry: Record<string, unknown> },
+): void {
+  const e = u.entry
+  if (e.type !== 'assistant' || !e.message) return
+  const msg = e.message as {
+    model?: string
+    usage?: {
+      input_tokens?: number
+      cache_read_input_tokens?: number
+      cache_creation_input_tokens?: number
+      output_tokens?: number
+    }
+    content?: Array<{ type?: string; text?: string }>
+  }
+  // Synthetic records (retries, injected system) have model '<synthetic>' —
+  // skip so we don't clobber the real model.
+  if (!msg.model || msg.model === '<synthetic>') return
+  const usage = msg.usage || {}
+  const ctx =
+    (usage.input_tokens ?? 0) +
+    (usage.cache_read_input_tokens ?? 0) +
+    (usage.cache_creation_input_tokens ?? 0)
+  let lastText: string | null = null
+  if (Array.isArray(msg.content)) {
+    for (const b of msg.content) {
+      if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+        lastText = b.text.slice(0, 500)
+        break
+      }
+    }
+  }
+
+  const prev = agg.getSession(u.session_id)
+  if (!prev) return
+  const modelChanged = prev.model !== msg.model
+  const ctxChanged = prev.context_tokens !== ctx
+  const textChanged = lastText !== null && prev.last_text !== lastText
+
+  upsertSession(db, {
+    session_id: prev.session_id,
+    machine_id: prev.machine_id,
+    name: prev.name,
+    last_seen: typeof e.timestamp === 'string' ? e.timestamp : new Date().toISOString(),
+    model: msg.model,
+    context_tokens: ctx || null,
+    last_text: lastText,
+    source: prev.source,
+  })
+
+  if (!modelChanged && !ctxChanged && !textChanged) return
+
+  const fresh = agg.getSession(u.session_id)
+  if (!fresh) return
+  const subs = db
+    .query<
+      { n: number },
+      { $s: string }
+    >("SELECT count(*) AS n FROM subagents WHERE session_id = $s AND status = 'running'")
+    .get({ $s: fresh.session_id })
+  sb.broadcastObserverFrame({
+    type: 'session-update',
+    data: { ...fresh, active_subagents: subs ? subs.n : 0 },
+  })
+}
+
+/**
+ * One-time scan on dashboard startup: for each known session, read the tail
+ * of its JSONL and harvest the latest assistant record's metadata. Sessions
+ * that were idle across the restart otherwise stay blank until they emit
+ * their next message.
+ */
+function seedAssistantMetadata(): void {
+  const projects = join(process.env.HOME ?? '/home/claude', '.claude', 'projects')
+  let files: string[] = []
+  try {
+    for (const cwdDir of require('fs').readdirSync(projects, { withFileTypes: true })) {
+      if (!cwdDir.isDirectory) continue
+      const inner = join(projects, cwdDir.name)
+      for (const f of require('fs').readdirSync(inner)) {
+        if (f.endsWith('.jsonl')) files.push(join(inner, f))
+      }
+    }
+  } catch {
+    return
+  }
+  let hits = 0
+  for (const path of files) {
+    try {
+      const raw = require('fs').readFileSync(path, 'utf-8') as string
+      const lines = raw.split('\n').filter(Boolean)
+      // Walk backwards to find the last real assistant record with a model.
+      for (let i = lines.length - 1; i >= 0 && i >= lines.length - 50; i--) {
+        let entry: Record<string, unknown>
+        try {
+          entry = JSON.parse(lines[i]!) as Record<string, unknown>
+        } catch {
+          continue
+        }
+        if (entry.type !== 'assistant') continue
+        const msg = entry.message as { model?: string } | undefined
+        if (!msg || !msg.model || msg.model === '<synthetic>') continue
+        const sessionId = path.split('/').pop()!.replace('.jsonl', '')
+        harvestAssistantMetadata(db, aggregator, switchboard, {
+          session_id: sessionId,
+          file_path: path,
+          entry,
+        })
+        hits++
+        break
+      }
+    } catch {
+      /* unreadable — skip */
+    }
+  }
+  if (hits > 0) console.log(`  Metadata:  seeded ${hits} sessions from JSONL tails`)
+}
+
 jsonlObserver.on((u) => {
   switchboard.broadcastObserverFrame({ type: 'jsonl', data: u })
+
+  // Harvest model + usage + last-text from assistant JSONL records and roll
+  // them into the aggregator's session row. Hook payloads don't carry these
+  // fields, but they live in every real assistant message. Without this,
+  // card "Model" / "ctx %" / last-text stays null forever.
+  harvestAssistantMetadata(db, aggregator, switchboard, u)
+
+  // Detect Claude Code API errors (overloaded/rate-limit/5xx). These don't
+  // fire a Stop hook, so the session state stays "working" forever. Flip
+  // to "errored" and emit an api-error observer frame so the dashboard
+  // can surface a notification.
+  const err = classifyApiError(u.entry)
+  if (!err) return
+  const session = aggregator.getSession(u.session_id)
+  if (!session) return
+  upsertSession(db, {
+    session_id: session.session_id,
+    machine_id: session.machine_id,
+    name: session.name,
+    last_seen: new Date().toISOString(),
+    state: 'errored',
+    source: session.source,
+  })
+  const ts =
+    u.entry &&
+    typeof u.entry === 'object' &&
+    typeof (u.entry as { timestamp?: unknown }).timestamp === 'string'
+      ? (u.entry as { timestamp: string }).timestamp
+      : new Date().toISOString()
+  switchboard.broadcastObserverFrame({
+    type: 'api-error',
+    data: {
+      session_id: session.session_id,
+      session_name: session.name,
+      file_path: u.file_path,
+      ts,
+      status: err.status,
+      errorType: err.errorType,
+      message: err.message,
+    },
+  })
+  // Also broadcast an updated session-update so cards flip to 'errored'
+  // immediately, without waiting for the next aggregator event.
+  const freshRow = aggregator.getSession(u.session_id)
+  if (freshRow) {
+    const subRow = db
+      .query<
+        { n: number },
+        { $s: string }
+      >("SELECT count(*) AS n FROM subagents WHERE session_id = $s AND status = 'running'")
+      .get({ $s: freshRow.session_id })
+    const activeSubagents = subRow ? subRow.n : 0
+    switchboard.broadcastObserverFrame({
+      type: 'session-update',
+      data: { ...freshRow, active_subagents: activeSubagents },
+    })
+  }
 })
 
 // When a JSONL file shrinks (compaction / file replacement), broadcast a
@@ -143,10 +364,14 @@ setInterval(() => {
 // --- HTML ---
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const indexHtml = readFileSync(join(__dirname, 'index.html'), 'utf-8')
-const dashboardCss = readFileSync(join(__dirname, 'dashboard.css'), 'utf-8')
-const dashboardJs = readFileSync(join(__dirname, 'dashboard.js'), 'utf-8')
-const notificationsJs = readFileSync(join(__dirname, 'notifications.js'), 'utf-8')
+// Read asset paths, but serve via Bun.file() at request time so edits to
+// index.html / dashboard.js / dashboard.css / notifications.js are picked
+// up without restarting the server. Previously these were cached as strings
+// at startup, which silently served stale content through dev iterations.
+const indexHtmlPath = join(__dirname, 'index.html')
+const dashboardCssPath = join(__dirname, 'dashboard.css')
+const dashboardJsPath = join(__dirname, 'dashboard.js')
+const notificationsJsPath = join(__dirname, 'notifications.js')
 
 // --- Server ---
 
@@ -172,6 +397,27 @@ function isAuthed(req: Request): boolean {
   const cookie = parseCookieHeader(req.headers.get('cookie'))
   return verifyCookie(db, cookie)
 }
+
+/**
+ * Resolve the uploader identity for /api/upload + /api/attachment.
+ * Returns a session name on success, or null when no valid auth is present.
+ *   - X-Party-Line-Token: looks up the session row → returns its name.
+ *   - Dashboard cookie: returns 'dashboard' as a pseudo-uploader.
+ */
+function resolveUploader(req: Request, db: import('bun:sqlite').Database): string | null {
+  const token = req.headers.get('x-party-line-token')
+  if (token) {
+    const row = getCcplSessionByToken(db, token)
+    if (row) return row.name
+  }
+  if (isAuthed(req)) return 'dashboard'
+  return null
+}
+
+const ATTACHMENTS_DIR = join(CONFIG_DIR, 'attachments')
+mkdirSync(ATTACHMENTS_DIR, { recursive: true })
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024 // 20 MB per file
+const ATTACHMENT_TTL_MS = 14 * 24 * 60 * 60 * 1000 // 14 days
 
 function requireAuth(req: Request): Response | null {
   if (isAuthed(req)) return null
@@ -245,7 +491,9 @@ const server = Bun.serve({
     }
 
     if (url.pathname === '/dashboard.css') {
-      return new Response(dashboardCss, { headers: { 'Content-Type': 'text/css' } })
+      return new Response(Bun.file(dashboardCssPath), {
+        headers: { 'Content-Type': 'text/css' },
+      })
     }
 
     if (url.pathname === '/logout' && req.method === 'POST') {
@@ -302,12 +550,84 @@ const server = Bun.serve({
           aggregator.ingest(ev)
           // Broadcast the raw hook event so the History view can live-append.
           switchboard.broadcastObserverFrame({ type: 'hook-event', data: ev })
+
+          // Self-heal ccpl_sessions when the plugin's uuid-rotate frame
+          // missed a /clear or /resume. Hook payloads carry session_id
+          // from Claude Code itself, so they are canonical. When it
+          // differs from the stored cc_session_uuid for this name,
+          // archive the stale uuid and adopt the new one.
+          if (ev.session_id && ev.session_name) {
+            switchboard.reconcileCcSessionUuid(ev.session_name, ev.session_id, 'hook_drift')
+          }
+
+          // Live-inject user prompts into the session-detail transcript
+          // without waiting for JSONL write/poll. JSONL remains the canonical
+          // source; the client dedupes when the canonical entry arrives.
+          const userPromptFrame = buildUserPromptFrame(ev)
+          if (userPromptFrame) switchboard.broadcastObserverFrame(userPromptFrame)
+        },
+      })
+    }
+
+    // PWA shell assets (sw.js, manifest.json, icons, favicon) must be
+    // reachable without auth so iOS/Android can install the app + register
+    // the Service Worker from a logged-out state. These files leak no
+    // session data.
+    if (url.pathname === '/sw.js') {
+      return new Response(Bun.file(resolve(__dirname, 'sw.js')), {
+        headers: {
+          'Content-Type': 'application/javascript',
+          'Service-Worker-Allowed': '/',
+          'Cache-Control': 'no-cache',
+        },
+      })
+    }
+    if (url.pathname === '/manifest.json') {
+      return new Response(Bun.file(resolve(__dirname, 'manifest.json')), {
+        headers: {
+          'Content-Type': 'application/manifest+json',
+          'Cache-Control': 'public, max-age=3600',
+        },
+      })
+    }
+    if (url.pathname === '/favicon.ico') {
+      return new Response(Bun.file(resolve(__dirname, 'favicon.ico')), {
+        headers: {
+          'Content-Type': 'image/x-icon',
+          'Cache-Control': 'public, max-age=86400',
+        },
+      })
+    }
+    if (url.pathname.startsWith('/icons/')) {
+      const rel = url.pathname.slice(1)
+      if (rel.includes('..')) return new Response('Not found', { status: 404 })
+      return new Response(Bun.file(resolve(__dirname, rel)), {
+        headers: {
+          'Content-Type': 'image/png',
+          'Cache-Control': 'public, max-age=86400',
         },
       })
     }
 
     const authFail = requireAuth(req)
     if (authFail) return authFail
+
+    // Dashboard-cookie-authed session mutations: archive current UUID or
+    // remove the session row outright. The actual logic lives in
+    // src/server/ccpl-api.ts so it can be unit-tested without spinning up a
+    // real HTTP server; here we just inject serve.ts's switchboard + auth.
+    const sessionMutationDeps = {
+      isAuthed,
+      broadcastObserverFrame: (frame: unknown) => switchboard.broadcastObserverFrame(frame),
+      closeSession: (name: string) => switchboard.closeSession(name, 4401, 'removed'),
+      deleteTokenFile: defaultDeleteTokenFile,
+    }
+    if (url.pathname === '/api/session/archive' && req.method === 'POST') {
+      return handleDashboardArchive(req, db, sessionMutationDeps)
+    }
+    if (url.pathname === '/api/session/remove' && req.method === 'DELETE') {
+      return handleDashboardRemove(req, db, sessionMutationDeps)
+    }
 
     // REST API: list sessions (debug-friendly view of ccpl_sessions)
     if (url.pathname === '/api/sessions') {
@@ -435,24 +755,120 @@ const server = Bun.serve({
     // REST API: send message — route through the switchboard.
     if (url.pathname === '/api/send' && req.method === 'POST') {
       return (async () => {
-        const body = (await req.json()) as { to?: string; message?: string; type?: string }
-        if (!body.to || !body.message) {
-          return Response.json({ error: '"to" and "message" required' }, { status: 400 })
+        const body = (await req.json()) as {
+          to?: string
+          message?: string
+          type?: string
+          attachment_ids?: string[]
         }
-        const { randomBytes } = await import('node:crypto')
+        if (!body.to) {
+          return Response.json({ error: '"to" required' }, { status: 400 })
+        }
+        // Accept empty message when at least one attachment is included — a
+        // generated image can be a standalone reply.
+        const attIds = Array.isArray(body.attachment_ids) ? body.attachment_ids : []
+        if (!body.message && attIds.length === 0) {
+          return Response.json(
+            { error: '"message" or non-empty "attachment_ids" required' },
+            { status: 400 },
+          )
+        }
+        // Resolve + validate attachment ids. Non-existent ids → 400 so the
+        // client learns about stale references instead of silently sending.
+        const atts: Attachment[] = []
+        for (const id of attIds) {
+          const row = getAttachment(db, id)
+          if (!row) {
+            return Response.json({ error: `unknown attachment: ${id}` }, { status: 400 })
+          }
+          atts.push(attachmentRowToMeta(row))
+        }
         const envelope = {
           id: randomBytes(8).toString('hex'),
           ts: Date.now(),
           from: NAME,
           to: body.to,
           envelope_type: (body.type as string) ?? 'message',
-          body: body.message,
+          body: body.message ?? '',
           callback_id: null,
           response_to: null,
+          ...(atts.length > 0 ? { attachments: atts } : {}),
         }
+        if (atts.length > 0) linkAttachmentsToEnvelope(db, envelope.id, attIds)
         switchboard.routeEnvelope(envelope)
         return Response.json({ ok: true, id: envelope.id })
       })()
+    }
+
+    // REST API: upload an attachment. Accepts multipart/form-data with a
+    // "file" part. Auth: dashboard cookie (browser) OR X-Party-Line-Token
+    // (MCP plugin). Returns Attachment metadata for the caller to include
+    // in a subsequent /api/send (or the MCP plugin's party_line_send frame).
+    if (url.pathname === '/api/upload' && req.method === 'POST') {
+      return (async () => {
+        const uploader = resolveUploader(req, db)
+        if (!uploader) return new Response('Unauthorized', { status: 401 })
+        const form = await req.formData().catch(() => null)
+        if (!form) {
+          return Response.json({ error: 'multipart body required' }, { status: 400 })
+        }
+        const file = form.get('file')
+        if (!(file instanceof Blob)) {
+          return Response.json({ error: '"file" part required' }, { status: 400 })
+        }
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          return Response.json(
+            { error: `file too large (${file.size} > ${MAX_ATTACHMENT_BYTES})` },
+            { status: 413 },
+          )
+        }
+        // Bun's FormData returns File (Blob subclass) with a `name`; use
+        // duck typing because lib.dom's File symbol isn't always in scope.
+        const fileName = (file as unknown as { name?: unknown }).name
+        const name =
+          (typeof fileName === 'string' && fileName) ||
+          String(form.get('name') ?? '') ||
+          'attachment'
+        const media_type =
+          String(form.get('media_type') ?? '') || file.type || 'application/octet-stream'
+        const id = randomBytes(16).toString('hex')
+        const storedDir = join(ATTACHMENTS_DIR, id)
+        mkdirSync(storedDir, { recursive: true })
+        const storedPath = join(storedDir, 'file')
+        writeFileSync(storedPath, Buffer.from(await file.arrayBuffer()))
+        const expires = Date.now() + ATTACHMENT_TTL_MS
+        insertAttachment(db, {
+          id,
+          uploader_session: uploader,
+          name,
+          media_type,
+          size: file.size,
+          stored_path: storedPath,
+          expires_at: expires,
+        })
+        const row = getAttachment(db, id)!
+        return Response.json(attachmentRowToMeta(row))
+      })()
+    }
+
+    // REST API: fetch an attachment. Auth: dashboard cookie OR token.
+    // Optional `?thumb=<px>` returns a downscaled image (images only).
+    if (url.pathname.startsWith('/api/attachment/') && req.method === 'GET') {
+      const id = url.pathname.slice('/api/attachment/'.length)
+      if (!/^[a-f0-9]{8,64}$/.test(id)) {
+        return new Response('Not found', { status: 404 })
+      }
+      const viewer = resolveUploader(req, db) || (isAuthed(req) ? 'dashboard' : null)
+      if (!viewer) return new Response('Unauthorized', { status: 401 })
+      const row = getAttachment(db, id)
+      if (!row) return new Response('Not found', { status: 404 })
+      return new Response(Bun.file(row.stored_path), {
+        headers: {
+          'Content-Type': row.media_type,
+          'Content-Disposition': `inline; filename="${row.name.replace(/"/g, '')}"`,
+          'Cache-Control': 'private, max-age=86400',
+        },
+      })
     }
 
     // REST API: single session + subagents
@@ -480,9 +896,13 @@ const server = Bun.serve({
     if (url.pathname === '/api/transcript') {
       const sidParam = url.searchParams.get('session_id')
       if (!sidParam) return Response.json({ error: 'session_id required' }, { status: 400 })
+      // Prefer the currently-registered ccpl session UUID (authoritative for
+      // "which session is live right now") over aggregator's most-recent-row
+      // heuristic, which can latch onto stale rows from past cc_session_uuids.
+      const ccpl = getCcplSessionByName(db, sidParam)
       const resolved = aggregator.getSession(sidParam)
-      const sessionUuid = resolved?.session_id ?? sidParam
-      const sessionName = resolved?.name ?? sidParam
+      const sessionUuid = ccpl?.cc_session_uuid ?? resolved?.session_id ?? sidParam
+      const sessionName = ccpl?.name ?? resolved?.name ?? sidParam
       const agentId = url.searchParams.get('agent_id') ?? undefined
       const limit = parseInt(url.searchParams.get('limit') ?? '200', 10)
       const afterUuid = url.searchParams.get('after_uuid') ?? undefined
@@ -534,51 +954,20 @@ const server = Bun.serve({
       }
     }
 
-    // Static assets
+    // Static assets — served via Bun.file() so edits land without a restart.
     if (url.pathname === '/dashboard.js') {
-      return new Response(dashboardJs, { headers: { 'Content-Type': 'application/javascript' } })
+      return new Response(Bun.file(dashboardJsPath), {
+        headers: { 'Content-Type': 'application/javascript' },
+      })
     }
     if (url.pathname === '/notifications.js') {
-      return new Response(notificationsJs, {
+      return new Response(Bun.file(notificationsJsPath), {
         headers: { 'Content-Type': 'application/javascript' },
       })
     }
 
-    // --- Static PWA assets ---
-    if (url.pathname === '/sw.js') {
-      return new Response(Bun.file(resolve(__dirname, 'sw.js')), {
-        headers: {
-          'Content-Type': 'application/javascript',
-          'Service-Worker-Allowed': '/',
-          'Cache-Control': 'no-cache',
-        },
-      })
-    }
-
-    if (url.pathname === '/manifest.json') {
-      return new Response(Bun.file(resolve(__dirname, 'manifest.json')), {
-        headers: {
-          'Content-Type': 'application/manifest+json',
-          'Cache-Control': 'public, max-age=3600',
-        },
-      })
-    }
-
-    if (url.pathname.startsWith('/icons/')) {
-      const rel = url.pathname.slice(1) // strip leading /
-      if (rel.includes('..')) {
-        return new Response('Not found', { status: 404 })
-      }
-      return new Response(Bun.file(resolve(__dirname, rel)), {
-        headers: {
-          'Content-Type': 'image/png',
-          'Cache-Control': 'public, max-age=86400',
-        },
-      })
-    }
-
     // Dashboard HTML
-    return new Response(indexHtml, {
+    return new Response(Bun.file(indexHtmlPath), {
       headers: { 'Content-Type': 'text/html' },
     })
   },
@@ -689,6 +1078,16 @@ const server = Bun.serve({
 // --- Start ---
 
 async function main(): Promise<void> {
+  // Backfill: sessions that haven't emitted a new JSONL line since the
+  // dashboard started would otherwise show blank model/ctx until their next
+  // message. Walk each live ccpl session's JSONL, read the last few lines,
+  // and feed them through harvestAssistantMetadata once.
+  try {
+    seedAssistantMetadata()
+  } catch (err) {
+    console.error('  Warning: metadata backfill failed:', err)
+  }
+
   await jsonlObserver.start()
   await geminiObserver.start()
   startQuotaPoller(300_000) // poll every 5 minutes
@@ -699,6 +1098,8 @@ async function main(): Promise<void> {
     if (deleted > 0) console.log(`  Retention: pruned ${deleted} old events`)
     const rolled = rollupDailyMetrics(db)
     if (rolled > 0) console.log(`  Metrics:   rolled up ${rolled} daily rows`)
+    const attPruned = pruneExpiredAttachments(db)
+    if (attPruned > 0) console.log(`  Retention: pruned ${attPruned} expired attachments`)
   } catch (err) {
     console.error('  Warning: retention/rollup failed:', err)
   }

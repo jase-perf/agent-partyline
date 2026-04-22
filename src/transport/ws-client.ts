@@ -12,7 +12,12 @@ export interface HelloPayload {
 
 export interface WsClientOpts {
   url: string
-  helloPayload: HelloPayload
+  /**
+   * Hello payload to send on every (re)connect. Accept a factory so the
+   * caller can freshen dynamic fields like cc_session_uuid at connect time
+   * instead of sending a stale snapshot captured at module-load.
+   */
+  helloPayload: HelloPayload | (() => HelloPayload)
   pingIntervalMs?: number
   reconnectInitialMs?: number
   reconnectMaxMs?: number
@@ -55,10 +60,27 @@ export function createWsClient(opts: WsClientOpts): WsClient {
     reconnectDelay = Math.min(reconnectDelay * 2, opts.reconnectMaxMs ?? 30_000)
   }
 
+  function isLocalhost(url: string): boolean {
+    try {
+      const h = new URL(url).hostname
+      return h === 'localhost' || h === '127.0.0.1' || h === '::1'
+    } catch {
+      return false
+    }
+  }
+
   function connect(): void {
     if (stopped) return
     try {
-      ws = new WebSocket(opts.url)
+      // For localhost WSS, accept self-signed certs. Token auth + local-only
+      // listener already gate access; NODE_TLS_REJECT_UNAUTHORIZED does not
+      // propagate reliably from claude CLI to MCP children.
+      if (opts.url.startsWith('wss:') && isLocalhost(opts.url)) {
+        const WS = WebSocket as unknown as new (url: string, opts: unknown) => WebSocket
+        ws = new WS(opts.url, { tls: { rejectUnauthorized: false } })
+      } else {
+        ws = new WebSocket(opts.url)
+      }
     } catch (err) {
       log('error', `ws construct failed: ${String(err)}`)
       scheduleReconnect()
@@ -69,7 +91,9 @@ export function createWsClient(opts: WsClientOpts): WsClient {
       log('info', `ws open to ${opts.url}`)
       reconnectDelay = opts.reconnectInitialMs ?? 100
       try {
-        ws!.send(JSON.stringify(opts.helloPayload))
+        const payload =
+          typeof opts.helloPayload === 'function' ? opts.helloPayload() : opts.helloPayload
+        ws!.send(JSON.stringify(payload))
       } catch (err) {
         log('error', `hello send failed: ${String(err)}`)
       }

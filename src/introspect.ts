@@ -189,20 +189,32 @@ function extractTool(content: string | ContentBlock[] | undefined): string | nul
 // Cached state
 let cachedSessionId: string | null = null
 let cachedJsonlPath: string | null = null
-let lookupAttempted = false
+
+/** Test-only: reset the module-level lookup cache. */
+export function __resetIntrospectCache(): void {
+  cachedSessionId = null
+  cachedJsonlPath = null
+}
 
 /**
  * Get the current session status by reading the JSONL tail.
- * Caches the session ID and file path after first lookup.
+ *
+ * Re-checks the current session ID on every call so that `/clear` (which
+ * rotates the Claude Code session UUID in-place inside the same process)
+ * is detected promptly. findSessionId() just reads a small file from
+ * ~/.claude/sessions/<pid>.json so this is cheap.
  */
 export function getSessionStatus(): SessionStatus | null {
-  // Resolve session ID once
-  if (!lookupAttempted) {
-    lookupAttempted = true
-    cachedSessionId = findSessionId()
-    if (cachedSessionId) {
-      cachedJsonlPath = findJsonlPath(cachedSessionId)
-    }
+  // Always consult the live sessions file so a /clear that rotates the
+  // UUID in place is observed. Only invalidate the cached JSONL path when
+  // the ID actually changes (keeps path-resolution costs amortized).
+  const currentId = findSessionId()
+  if (currentId && currentId !== cachedSessionId) {
+    cachedSessionId = currentId
+    cachedJsonlPath = findJsonlPath(currentId)
+  } else if (!currentId && cachedSessionId === null) {
+    // Haven't found a session yet — nothing to do.
+    return null
   }
 
   if (!cachedJsonlPath) return null

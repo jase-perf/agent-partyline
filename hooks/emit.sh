@@ -11,7 +11,12 @@
 set -uo pipefail
 
 HOOK_EVENT="${1:-UNKNOWN}"
-ENDPOINT="${PARTY_LINE_INGEST:-http://localhost:3400/ingest}"
+ENDPOINT="${PARTY_LINE_INGEST:-https://localhost:3400/ingest}"
+# Localhost dashboards typically use a self-signed cert; accept it.
+CURL_TLS_OPTS=()
+if [[ "$ENDPOINT" == https://localhost* || "$ENDPOINT" == https://127.0.0.1* ]]; then
+  CURL_TLS_OPTS+=(-k)
+fi
 TOKEN_FILE="${HOME}/.config/party-line/ingest-token"
 MACHINE_ID_FILE="${HOME}/.config/party-line/machine-id"
 
@@ -62,7 +67,7 @@ ENVELOPE=$(jq -n \
   } + (if $aid != "" then {agent_id: $aid} else {} end)
     + (if $at != "" then {agent_type: $at} else {} end)')
 
-curl --silent --show-error --max-time 1 \
+curl --silent --show-error --max-time 1 "${CURL_TLS_OPTS[@]}" \
   -X POST \
   -H "Content-Type: application/json" \
   -H "X-Party-Line-Token: $TOKEN" \
