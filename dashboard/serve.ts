@@ -37,12 +37,14 @@ import {
   listSessions as listCcplSessions,
   getSessionByName as getCcplSessionByName,
   getSessionByToken as getCcplSessionByToken,
+  messagesForSession,
 } from '../src/storage/ccpl-queries.js'
 import {
   insertAttachment,
   getAttachment,
   linkAttachmentsToEnvelope,
   attachmentRowToMeta,
+  attachmentsForEnvelope,
 } from '../src/storage/attachments.js'
 import type { Attachment } from '../src/types.js'
 import { randomBytes } from 'node:crypto'
@@ -907,13 +909,32 @@ const server = Bun.serve({
       const limit = parseInt(url.searchParams.get('limit') ?? '200', 10)
       const afterUuid = url.searchParams.get('after_uuid') ?? undefined
       const projectsRoot = join(process.env.HOME ?? '/home/claude', '.claude', 'projects')
+      // Surface party-line envelopes to/from this session alongside the JSONL
+      // transcript so they survive a page refresh. Without this, the user's
+      // sent messages render once via the live observer broadcast and then
+      // disappear when the dashboard re-fetches the transcript.
+      const messageRows = messagesForSession(db, sessionName, limit)
+      const envelopes = messageRows.map((r) => {
+        const atts = attachmentsForEnvelope(db, r.id)
+        return {
+          id: r.id,
+          from: r.from_name,
+          to: r.to_name,
+          type: r.type,
+          body: r.body ?? '',
+          ts: new Date(r.ts).toISOString(),
+          callback_id: r.callback_id,
+          response_to: r.response_to,
+          ...(atts.length > 0 ? { attachments: atts } : {}),
+        }
+      })
       const all = buildTranscript({
         projectsRoot,
         sessionId: sessionUuid,
         sessionName,
         agentId,
         limit,
-        envelopes: [],
+        envelopes,
       })
       const result = afterUuid ? filterAfterUuid(all, afterUuid) : all
       return Response.json(result)

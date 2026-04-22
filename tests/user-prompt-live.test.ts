@@ -56,6 +56,28 @@ describe('buildUserPromptFrame (unit)', () => {
       prompt: 'hello world',
     })
   })
+
+  test('returns null when prompt is a party-line <channel> wrapper (avoids duplicate with envelope render)', () => {
+    const base: HookEvent = {
+      machine_id: 'm',
+      session_name: 'partyline-dev',
+      session_id: 'sid-1',
+      hook_event: 'UserPromptSubmit',
+      ts: '2026-04-22T00:00:00Z',
+      payload: {},
+    }
+    const channelPrompt =
+      '<channel source="party-line" from="dashboard" to="partyline-dev" type="message" message_id="abc123">hi there</channel>'
+    expect(buildUserPromptFrame({ ...base, payload: { prompt: channelPrompt } })).toBeNull()
+    // Surrounding whitespace must still match — the recipient's JSONL may trim.
+    expect(
+      buildUserPromptFrame({ ...base, payload: { prompt: '\n  ' + channelPrompt + '\n' } }),
+    ).toBeNull()
+    // A prompt that merely mentions a channel tag inside normal prose is NOT
+    // suppressed — only whole-prompt channel wrappers.
+    const mixed = 'look at this: ' + channelPrompt + ' — what do you think?'
+    expect(buildUserPromptFrame({ ...base, payload: { prompt: mixed } })).not.toBeNull()
+  })
 })
 
 describe('user-prompt end-to-end pipeline', () => {

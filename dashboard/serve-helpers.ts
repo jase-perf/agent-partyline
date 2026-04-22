@@ -98,10 +98,17 @@ export interface UserPromptFrame {
  * or null if the event is not a UserPromptSubmit with a usable prompt string.
  * Extracted for testability.
  */
+const PARTY_LINE_CHANNEL_RE = /^<channel\s+[^>]*\bsource="party-line"[^>]*>[\s\S]*<\/channel>$/
+
 export function buildUserPromptFrame(ev: HookEvent): UserPromptFrame | null {
   if (ev.hook_event !== 'UserPromptSubmit') return null
   const prompt = (ev.payload as { prompt?: unknown }).prompt
   if (typeof prompt !== 'string' || prompt.length === 0) return null
+  // Inbound party-line messages are delivered by the plugin as <channel> tags
+  // in the recipient's next user turn. The dashboard already renders these
+  // via the envelope broadcast, so firing a user-prompt frame would cause a
+  // duplicate entry (and show the raw channel markup to the user).
+  if (PARTY_LINE_CHANNEL_RE.test(prompt.trim())) return null
   return {
     type: 'user-prompt',
     data: {

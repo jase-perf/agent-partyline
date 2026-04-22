@@ -92,3 +92,14 @@ export function listExpiredAttachments(
 export function deleteAttachment(db: Database, id: string): void {
   db.query('DELETE FROM attachments WHERE id = ?').run(id)
 }
+
+/** Fetch attachment metadata for a single envelope, oldest first. */
+export function attachmentsForEnvelope(db: Database, envelopeId: string): Attachment[] {
+  const rows = db
+    .query<
+      AttachmentRow,
+      { $eid: string }
+    >('SELECT * FROM attachments WHERE envelope_id = $eid ORDER BY created_at ASC')
+    .all({ $eid: envelopeId })
+  return rows.map(attachmentRowToMeta)
+}

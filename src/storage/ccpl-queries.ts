@@ -161,3 +161,25 @@ export function insertMessage(db: Database, row: MessageRow): void {
 export function recentMessages(db: Database, limit: number): MessageRow[] {
   return db.query(`SELECT * FROM messages ORDER BY ts DESC LIMIT ?`).all(limit) as MessageRow[]
 }
+
+/**
+ * Fetch messages where the given session name is sender or is listed in the
+ * comma-separated recipient field. Returns chronologically ordered rows
+ * (oldest → newest) capped at `limit`.
+ */
+export function messagesForSession(db: Database, name: string, limit: number): MessageRow[] {
+  const rows = db
+    .query(
+      `SELECT * FROM messages
+       WHERE from_name = ?
+          OR to_name = ?
+          OR to_name = 'all'
+          OR to_name LIKE ?
+          OR to_name LIKE ?
+          OR to_name LIKE ?
+       ORDER BY ts DESC
+       LIMIT ?`,
+    )
+    .all(name, name, `${name},%`, `%,${name}`, `%,${name},%`, limit) as MessageRow[]
+  return rows.reverse()
+}

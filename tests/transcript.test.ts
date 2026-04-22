@@ -30,9 +30,7 @@ describe('buildTranscript', () => {
       },
       {
         role: 'user',
-        content: [
-          { type: 'tool_result', tool_use_id: 'tu1', content: 'file.txt\n' },
-        ],
+        content: [{ type: 'tool_result', tool_use_id: 'tu1', content: 'file.txt\n' }],
       },
     ]
 
@@ -214,7 +212,7 @@ describe('buildTranscript', () => {
     // Envelopes need timestamps that sort *after* the JSONL entries.
     // buildTranscript assigns `ts = new Date().toISOString()` to JSONL records,
     // so use far-future timestamps to ensure envelopes sort last.
-    const futureA = new Date(Date.now() + 60_000).toISOString()  // +1 minute
+    const futureA = new Date(Date.now() + 60_000).toISOString() // +1 minute
     const futureB = new Date(Date.now() + 120_000).toISOString() // +2 minutes
 
     const all = buildTranscript({
@@ -223,10 +221,22 @@ describe('buildTranscript', () => {
       sessionName: 'mySession',
       limit: 100,
       envelopes: [
-        { id: 'env-a', from: 'mySession', to: 'other', type: 'message',
-          body: 'hello', ts: futureA },
-        { id: 'env-b', from: 'other', to: 'mySession', type: 'message',
-          body: 'reply', ts: futureB },
+        {
+          id: 'env-a',
+          from: 'mySession',
+          to: 'other',
+          type: 'message',
+          body: 'hello',
+          ts: futureA,
+        },
+        {
+          id: 'env-b',
+          from: 'other',
+          to: 'mySession',
+          type: 'message',
+          body: 'reply',
+          ts: futureB,
+        },
       ],
     })
     // We have 2 JSONL entries + 2 envelopes = 4 (envelopes at the end)
@@ -247,7 +257,8 @@ describe('buildTranscript', () => {
     const sessionId = 'sess-1'
     const cwdDir = join(projectsRoot, cwdSlug)
     mkdirSync(cwdDir)
-    writeFileSync(join(cwdDir, `${sessionId}.jsonl`),
+    writeFileSync(
+      join(cwdDir, `${sessionId}.jsonl`),
       JSON.stringify({
         type: 'assistant',
         uuid: 'a1',
@@ -262,15 +273,96 @@ describe('buildTranscript', () => {
       sessionName: 'work',
       limit: 100,
       envelopes: [
-        { id: 'e1', from: 'work', to: 'research', type: 'request',
-          body: 'find thing', ts: '2026-04-20T00:00:03Z', callback_id: 'cb1' },
-        { id: 'e2', from: 'research', to: 'work', type: 'response',
-          body: 'found', ts: '2026-04-20T00:00:05Z', response_to: 'cb1' },
+        {
+          id: 'e1',
+          from: 'work',
+          to: 'research',
+          type: 'request',
+          body: 'find thing',
+          ts: '2026-04-20T00:00:03Z',
+          callback_id: 'cb1',
+        },
+        {
+          id: 'e2',
+          from: 'research',
+          to: 'work',
+          type: 'response',
+          body: 'found',
+          ts: '2026-04-20T00:00:05Z',
+          response_to: 'cb1',
+        },
       ],
     })
 
-    expect(entries.some((e) => e.type === 'party-line-send' && e.other_session === 'research')).toBe(true)
-    expect(entries.some((e) => e.type === 'party-line-receive' && e.other_session === 'research')).toBe(true)
+    expect(
+      entries.some((e) => e.type === 'party-line-send' && e.other_session === 'research'),
+    ).toBe(true)
+    expect(
+      entries.some((e) => e.type === 'party-line-receive' && e.other_session === 'research'),
+    ).toBe(true)
+  })
+
+  test('dashboard-authored envelopes render as "user" turns so pre/post refresh match', () => {
+    const cwdDir = join(projectsRoot, '-home-y')
+    mkdirSync(cwdDir, { recursive: true })
+    writeFileSync(join(cwdDir, 'sess-dash.jsonl'), '')
+
+    const entries = buildTranscript({
+      projectsRoot,
+      sessionId: 'sess-dash',
+      sessionName: 'partyline-dev',
+      limit: 100,
+      envelopes: [
+        {
+          id: 'edash1',
+          from: 'dashboard',
+          to: 'partyline-dev',
+          type: 'message',
+          body: 'hello from web',
+          ts: '2026-04-22T09:00:00Z',
+        },
+      ],
+    })
+    expect(entries.length).toBe(1)
+    expect(entries[0]!.type).toBe('user')
+    expect((entries[0] as { text?: string }).text).toBe('hello from web')
+    expect(entries[0]!.uuid).toBe('edash1')
+  })
+
+  test('drops JSONL user turns that are wholly a party-line <channel> wrapper', () => {
+    const cwdDir = join(projectsRoot, '-home-z')
+    mkdirSync(cwdDir, { recursive: true })
+    const channelText =
+      '<channel source="party-line" from="dashboard" to="me" type="message" message_id="abc">hi</channel>'
+    const lines = [
+      {
+        type: 'user',
+        message: { role: 'user', content: channelText },
+        uuid: 'u-channel',
+        timestamp: '2026-04-22T09:00:01Z',
+      },
+      {
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'text', text: channelText }] },
+        uuid: 'u-channel-array',
+        timestamp: '2026-04-22T09:00:02Z',
+      },
+      {
+        type: 'user',
+        message: { role: 'user', content: 'real user text' },
+        uuid: 'u-real',
+        timestamp: '2026-04-22T09:00:03Z',
+      },
+    ]
+    writeFileSync(
+      join(cwdDir, 'sess-ch.jsonl'),
+      lines.map((l) => JSON.stringify(l)).join('\n') + '\n',
+    )
+
+    const entries = buildTranscript({ projectsRoot, sessionId: 'sess-ch', limit: 100 })
+    const userEntries = entries.filter((e) => e.type === 'user')
+    expect(userEntries.length).toBe(1)
+    expect((userEntries[0] as { text?: string }).text).toBe('real user text')
   })
 
   // ---------------------------------------------------------------------------
@@ -327,8 +419,7 @@ describe('buildTranscript', () => {
         type: 'user',
         message: {
           role: 'user',
-          content:
-            '<system-reminder>Respond with just the action or changes.</system-reminder>',
+          content: '<system-reminder>Respond with just the action or changes.</system-reminder>',
         },
         isMeta: true,
         uuid: 'u-meta-2',
@@ -349,7 +440,9 @@ describe('buildTranscript', () => {
     expect(userEntries[0]!.text).toBe('What does this plugin do?')
 
     // The assistant text must still be present
-    expect(entries.some((e) => e.type === 'assistant-text' && e.text === 'Here is the answer.')).toBe(true)
+    expect(
+      entries.some((e) => e.type === 'assistant-text' && e.text === 'Here is the answer.'),
+    ).toBe(true)
 
     // The giant skill description and system-reminder must NOT appear as user text.
     const bleed = entries.find(
@@ -357,7 +450,8 @@ describe('buildTranscript', () => {
     )
     expect(bleed).toBeUndefined()
     const sysReminderBleed = entries.find(
-      (e) => e.type === 'user' && typeof e.text === 'string' && e.text.includes('<system-reminder>'),
+      (e) =>
+        e.type === 'user' && typeof e.text === 'string' && e.text.includes('<system-reminder>'),
     )
     expect(sysReminderBleed).toBeUndefined()
   })
@@ -465,14 +559,30 @@ describe('buildTranscript', () => {
 
     // Pre-compaction transcript
     const preCompactLines = [
-      { type: 'user', message: { role: 'user', content: 'old q1' },
-        uuid: 'old-u1', timestamp: '2026-04-20T00:00:01Z' },
-      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'old a1' }] },
-        uuid: 'old-a1', timestamp: '2026-04-20T00:00:02Z' },
-      { type: 'user', message: { role: 'user', content: 'old q2' },
-        uuid: 'old-u2', timestamp: '2026-04-20T00:00:03Z' },
-      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'old a2' }] },
-        uuid: 'old-a2', timestamp: '2026-04-20T00:00:04Z' },
+      {
+        type: 'user',
+        message: { role: 'user', content: 'old q1' },
+        uuid: 'old-u1',
+        timestamp: '2026-04-20T00:00:01Z',
+      },
+      {
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'old a1' }] },
+        uuid: 'old-a1',
+        timestamp: '2026-04-20T00:00:02Z',
+      },
+      {
+        type: 'user',
+        message: { role: 'user', content: 'old q2' },
+        uuid: 'old-u2',
+        timestamp: '2026-04-20T00:00:03Z',
+      },
+      {
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'old a2' }] },
+        uuid: 'old-a2',
+        timestamp: '2026-04-20T00:00:04Z',
+      },
     ]
     writeFileSync(
       join(cwdDir, 'sess-compact.jsonl'),
@@ -484,10 +594,19 @@ describe('buildTranscript', () => {
 
     // Compaction: rewrite file with a fresh summary + current question
     const postCompactLines = [
-      { type: 'user', message: { role: 'user', content: '[summary of previous conversation]' },
-        uuid: 'new-summary', timestamp: '2026-04-20T00:05:00Z', isMeta: true },
-      { type: 'user', message: { role: 'user', content: 'the current question' },
-        uuid: 'new-u1', timestamp: '2026-04-20T00:05:01Z' },
+      {
+        type: 'user',
+        message: { role: 'user', content: '[summary of previous conversation]' },
+        uuid: 'new-summary',
+        timestamp: '2026-04-20T00:05:00Z',
+        isMeta: true,
+      },
+      {
+        type: 'user',
+        message: { role: 'user', content: 'the current question' },
+        uuid: 'new-u1',
+        timestamp: '2026-04-20T00:05:01Z',
+      },
     ]
     writeFileSync(
       join(cwdDir, 'sess-compact.jsonl'),

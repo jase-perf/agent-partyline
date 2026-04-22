@@ -14,6 +14,7 @@ import {
   pruneInactive,
   insertMessage,
   recentMessages,
+  messagesForSession,
 } from '../src/storage/ccpl-queries'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -145,6 +146,32 @@ describe('ccpl-queries', () => {
     const recent = recentMessages(db, 10)
     expect(recent[0]!.id).toBe('b')
     expect(recent[1]!.id).toBe('a')
+    cleanup()
+  })
+
+  test('messagesForSession returns sent, received, broadcast, and fan-out messages in ts ASC', () => {
+    const mk = (id: string, ts: number, from: string, to: string) => ({
+      id,
+      ts,
+      from_name: from,
+      to_name: to,
+      type: 'message',
+      body: id,
+      callback_id: null,
+      response_to: null,
+      cc_session_uuid: null,
+    })
+    insertMessage(db, mk('sent', 1000, 'partyline-dev', 'other'))
+    insertMessage(db, mk('recv', 2000, 'other', 'partyline-dev'))
+    insertMessage(db, mk('bcast', 3000, 'other', 'all'))
+    insertMessage(db, mk('fanout-head', 4000, 'other', 'partyline-dev,a,b'))
+    insertMessage(db, mk('fanout-mid', 5000, 'other', 'a,partyline-dev,b'))
+    insertMessage(db, mk('fanout-tail', 6000, 'other', 'a,b,partyline-dev'))
+    insertMessage(db, mk('unrelated', 7000, 'other', 'someone-else'))
+
+    const rows = messagesForSession(db, 'partyline-dev', 50)
+    const ids = rows.map((r) => r.id)
+    expect(ids).toEqual(['sent', 'recv', 'bcast', 'fanout-head', 'fanout-mid', 'fanout-tail'])
     cleanup()
   })
 

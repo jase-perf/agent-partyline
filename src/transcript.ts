@@ -142,6 +142,31 @@ function isSystemReminderString(text: string): boolean {
 }
 
 /**
+ * True when the string is nothing but a `<channel source="party-line" ...>...</channel>`
+ * tag. These appear in JSONL as user turns whenever the plugin delivers an
+ * inbound party-line message to the session's conversation. We already render
+ * the underlying envelope (from the `messages` table) as a transcript entry,
+ * so re-rendering the raw channel tag would duplicate it and leak protocol
+ * framing into the UI.
+ */
+/** True when `to` (a raw envelope recipient field) addresses `name` directly,
+ *  via broadcast, or as part of a comma-separated fan-out list. */
+function targetsName(to: string, name: string): boolean {
+  if (!to) return false
+  if (to === name || to === 'all') return true
+  return to
+    .split(',')
+    .map((s) => s.trim())
+    .includes(name)
+}
+
+function isPartyLineChannelString(text: string): boolean {
+  if (typeof text !== 'string') return false
+  const trimmed = text.trim()
+  return /^<channel\s+[^>]*\bsource="party-line"[^>]*>[\s\S]*<\/channel>$/.test(trimmed)
+}
+
+/**
  * For each subdir of projectsRoot, check if <slug>/<sessionId>.jsonl exists.
  * Returns the slug or null.
  */
@@ -301,6 +326,7 @@ function recordToEntries(
       // Even without isMeta, a bare <system-reminder>… string is never real
       // user input — skip it as a safety net for older or hook-injected lines.
       if (isSystemReminderString(rec.content)) return entries
+      if (isPartyLineChannelString(rec.content)) return entries
       entries.push({ uuid: lineUuid, ts, type: 'user', text: rec.content })
     } else if (Array.isArray(rec.content)) {
       let blockIdx = 0
@@ -322,6 +348,10 @@ function recordToEntries(
           // Same safety net for array-shaped content: <system-reminder>-only
           // text blocks are synthetic injections, not user input.
           if (isSystemReminderString(blk.text)) {
+            blockIdx++
+            continue
+          }
+          if (isPartyLineChannelString(blk.text)) {
             blockIdx++
             continue
           }
@@ -395,7 +425,20 @@ export function buildTranscript(opts: BuildTranscriptOptions): TranscriptEntry[]
   if (opts.envelopes && opts.sessionName) {
     const name = opts.sessionName
     for (const env of opts.envelopes) {
-      if (env.from === name) {
+      if (env.from === 'dashboard' && (env.to === name || targetsName(env.to, name))) {
+        // Dashboard-authored messages render as the session's own "you:" turn
+        // to match the live render in appendEnvelopeToStream. The envelope id
+        // is the stable key that dedups against subsequent re-fetches.
+        entries.push({
+          uuid: env.id,
+          ts: env.ts,
+          type: 'user',
+          text: env.body,
+          ...(env.attachments && env.attachments.length > 0
+            ? { attachments: env.attachments }
+            : {}),
+        })
+      } else if (env.from === name) {
         entries.push({
           uuid: env.id,
           ts: env.ts,
@@ -409,13 +452,7 @@ export function buildTranscript(opts: BuildTranscriptOptions): TranscriptEntry[]
             ? { attachments: env.attachments }
             : {}),
         })
-      } else if (
-        env.to === name ||
-        env.to
-          .split(',')
-          .map((s) => s.trim())
-          .includes(name)
-      ) {
+      } else if (targetsName(env.to, name)) {
         entries.push({
           uuid: env.id,
           ts: env.ts,
