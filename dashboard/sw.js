@@ -1,7 +1,7 @@
 // Party Line Dashboard Service Worker.
 // Caches the app shell, serves it offline, and handles notification clicks.
 
-const CACHE_NAME = 'party-line-shell-v3'
+const CACHE_NAME = 'party-line-shell-v4'
 
 const SHELL = [
   '/',
@@ -51,20 +51,39 @@ self.addEventListener('fetch', (event) => {
   )
 })
 
+// Derive the in-app route from a notification's `data` payload. This logic
+// is mirrored in dashboard/sw-routes.js where it's covered by unit tests;
+// keep the two in sync. Using PATH routes (not hash routes) because
+// dashboard.js parseUrl() matches `/session/<name>` — a `/#/session/...`
+// would never trigger the router (this was the previous bug).
+function notificationRouteFromData(data) {
+  const sessionName = data && data.sessionName
+  if (!sessionName) return '/'
+  return '/session/' + encodeURIComponent(sessionName)
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
   const data = event.notification.data || {}
-  const sessionName = data.sessionName
-  const url = sessionName ? '/#/session/' + encodeURIComponent(sessionName) : '/'
+  const url = notificationRouteFromData(data)
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      // Same-origin match. `client.url` is absolute (includes origin), so we
+      // compare pathname + search against our relative target.
       for (const client of list) {
-        if (client.url.endsWith(url) && 'focus' in client) {
-          return client.focus()
+        try {
+          const u = new URL(client.url)
+          if (u.pathname + u.search === url && 'focus' in client) {
+            return client.focus()
+          }
+        } catch {
+          // client.url parse failed — skip.
         }
       }
-      // No window currently on that route — focus any existing client or open one.
+      // No window on that route yet. If one is open, focus+navigate it;
+      // otherwise open a new one. Both paths need the URL that the
+      // dashboard's client-side router will parse on load.
       const first = list[0]
       if (first && 'focus' in first && 'navigate' in first) {
         return first.focus().then(() => first.navigate(url))
