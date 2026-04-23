@@ -1,7 +1,8 @@
 import type { Database } from 'bun:sqlite'
-import { listArchivesForSession } from '../src/storage/transcript-entries.js'
+import { listArchivesForSession, archiveLabel } from '../src/storage/transcript-entries.js'
 
 const LABEL_MAX_LEN = 32
+const TOOLTIP_MAX_LEN = 200
 
 /**
  * GET /api/archives?session=<name>
@@ -22,8 +23,6 @@ export async function handleApiArchives(req: Request, db: Database): Promise<Res
   return Response.json(result)
 }
 
-const TOOLTIP_MAX_LEN = 200
-
 /**
  * GET /api/archive-label?uuid=<uuid>
  *   → { label: string | null }
@@ -38,6 +37,5 @@ export async function handleApiArchiveLabel(req: Request, db: Database): Promise
   if (!uuid) {
     return Response.json({ error: 'uuid param required' }, { status: 400 })
   }
-  const { archiveLabel } = await import('../src/storage/transcript-entries.js')
   return Response.json({ label: archiveLabel(db, uuid, TOOLTIP_MAX_LEN) })
 }
