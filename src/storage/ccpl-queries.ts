@@ -74,6 +74,12 @@ export function getSessionByToken(db: Database, token: string): CcplSessionRow |
   return row ? rowToSession(row) : null
 }
 
+export function getSessionByCcUuid(db: Database, ccUuid: string): CcplSessionRow | null {
+  if (!ccUuid) return null
+  const row = db.query(`SELECT * FROM ccpl_sessions WHERE cc_session_uuid = ? LIMIT 1`).get(ccUuid)
+  return row ? rowToSession(row) : null
+}
+
 export function listSessions(db: Database): CcplSessionRow[] {
   const rows = db
     .query(`SELECT * FROM ccpl_sessions ORDER BY online DESC, last_active_at DESC`)
