@@ -77,6 +77,7 @@ import {
 } from '../src/server/ccpl-api.js'
 import { createSwitchboard } from '../src/server/switchboard.js'
 import { handleApiArchives, handleApiArchiveLabel } from './api-archives.js'
+import { buildArchiveTranscriptResponse } from './api-transcript-uuid.js'
 
 // --- Args ---
 
@@ -928,6 +929,13 @@ const server = Bun.serve({
     if (url.pathname === '/api/transcript') {
       const sidParam = url.searchParams.get('session_id')
       if (!sidParam) return Response.json({ error: 'session_id required' }, { status: 400 })
+      const explicitUuid = url.searchParams.get('uuid')
+      if (explicitUuid) {
+        // DB-backed read for an archived uuid (or the live uuid if explicitly
+        // requested). Bypasses the live aggregator + JSONL path entirely.
+        const uuidLimit = parseInt(url.searchParams.get('limit') ?? '200', 10)
+        return Response.json(buildArchiveTranscriptResponse(db, sidParam, explicitUuid, uuidLimit))
+      }
       // Prefer the currently-registered ccpl session UUID (authoritative for
       // "which session is live right now") over aggregator's most-recent-row
       // heuristic, which can latch onto stale rows from past cc_session_uuids.
