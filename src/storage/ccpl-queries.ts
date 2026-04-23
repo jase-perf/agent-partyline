@@ -106,10 +106,15 @@ export function archiveSession(db: Database, name: string, oldUuid: string, reas
       `INSERT INTO ccpl_archives (name, old_uuid, archived_at, reason)
        VALUES (?, ?, ?, ?)`,
     ).run(name, oldUuid, Date.now(), reason)
+    // Only null the live cc_session_uuid if we are archiving the *currently* live one.
+    // Calling archiveSession with an unrelated oldUuid (e.g. from tests or future
+    // bookkeeping flows) must NOT clobber the live pointer.
     db.query(
       `UPDATE ccpl_sessions
-       SET cc_session_uuid = NULL, revision = revision + 1 WHERE name = ?`,
-    ).run(name)
+       SET cc_session_uuid = CASE WHEN cc_session_uuid = ? THEN NULL ELSE cc_session_uuid END,
+           revision = revision + 1
+       WHERE name = ?`,
+    ).run(oldUuid, name)
   })()
 }
 

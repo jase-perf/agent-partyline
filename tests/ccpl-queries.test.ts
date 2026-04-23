@@ -185,4 +185,17 @@ describe('ccpl-queries', () => {
     expect(list[0]!.online).toBe(true)
     cleanup()
   })
+
+  test('archiveSession with non-current oldUuid leaves cc_session_uuid alone', () => {
+    registerSession(db, 'foo', '/tmp')
+    updateSessionOnConnect(db, 'foo', 'live-uuid', 1, 'm')
+    // Archive an unrelated uuid — must NOT clobber the live pointer.
+    archiveSession(db, 'foo', 'unrelated-old', 'clear')
+    const row = getSessionByName(db, 'foo')!
+    expect(row.cc_session_uuid).toBe('live-uuid')
+    // The archive row was still recorded.
+    const archives = db.query(`SELECT * FROM ccpl_archives WHERE name = ?`).all('foo')
+    expect(archives.length).toBe(1)
+    cleanup()
+  })
 })
