@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
 import type { Database } from 'bun:sqlite'
 import { openDb } from '../src/storage/db'
-import { registerSession } from '../src/storage/ccpl-queries'
+import { registerSession, getSessionByName } from '../src/storage/ccpl-queries'
 import { createSwitchboard } from '../src/server/switchboard'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -591,6 +591,49 @@ describe('switchboard', () => {
       cc_session_uuid: string
     }
     expect(row.cc_session_uuid).toBe('uuid-1')
+    cleanup()
+  })
+
+  test('Case A — resuming an archived uuid keeps the archive row + adopts uuid as live', () => {
+    registerSession(db, 'foo', '/tmp')
+    const sb = createSwitchboard(db)
+
+    // Phase 1: live=A, then archive A and adopt B (e.g. /clear)
+    sb.handleSessionHello(fakeWs('session'), {
+      token: getSessionByName(db, 'foo')!.token,
+      name: 'foo',
+      cc_session_uuid: 'A',
+      pid: 1,
+      machine_id: null,
+    })
+    sb.reconcileCcSessionUuid('foo', 'B', 'hook_drift')
+
+    // Phase 2: user runs /resume back to A. New hook event carries A.
+    sb.reconcileCcSessionUuid('foo', 'A', 'hook_drift')
+
+    // Live uuid should now be A again. B is now archived.
+    const cur = db.query(`SELECT cc_session_uuid FROM ccpl_sessions WHERE name = ?`).get('foo') as {
+      cc_session_uuid: string
+    }
+    expect(cur.cc_session_uuid).toBe('A')
+
+    // Both A and B archives exist as historical rows. listArchivesForSession
+    // excludes the live uuid (A) from `archives`.
+    const { listArchivesForSession } = require('../src/storage/transcript-entries')
+    const list = listArchivesForSession(db, 'foo', 32)
+    expect(list.live?.uuid).toBe('A')
+    expect(list.archives.map((a: { uuid: string }) => a.uuid)).toEqual(['B'])
+    cleanup()
+  })
+
+  test('Case B — onUuidAdopted fires for stranger uuid (dashboard wires backfill there)', () => {
+    registerSession(db, 'foo', '/tmp')
+    const adopted: Array<{ name: string; uuid: string }> = []
+    const sb = createSwitchboard(db, {
+      onUuidAdopted: (name, uuid) => adopted.push({ name, uuid }),
+    })
+    sb.reconcileCcSessionUuid('foo', 'never-seen-uuid', 'hook_drift')
+    expect(adopted).toEqual([{ name: 'foo', uuid: 'never-seen-uuid' }])
     cleanup()
   })
 })
