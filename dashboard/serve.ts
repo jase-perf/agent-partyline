@@ -76,6 +76,7 @@ import {
   defaultDeleteTokenFile,
 } from '../src/server/ccpl-api.js'
 import { createSwitchboard } from '../src/server/switchboard.js'
+import { handleApiArchives } from './api-archives.js'
 
 // --- Args ---
 
@@ -663,6 +664,11 @@ const server = Bun.serve({
         },
       }))
       return Response.json(rows)
+    }
+
+    // GET /api/archives?session=<name> — per-session History list
+    if (url.pathname === '/api/archives' && req.method === 'GET') {
+      return handleApiArchives(req, db)
     }
 
     // REST API: get context overrides
