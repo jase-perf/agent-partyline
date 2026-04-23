@@ -13,6 +13,29 @@ export function pruneOldEvents(db: Database, days: number): number {
 }
 
 /**
+ * Mark any subagent still 'running' whose started_at is older than
+ * maxAgeHours as 'cancelled' with ended_at = now. Safety net for cases the
+ * aggregator's inline cancel-on-parent-turn-end path missed (server restart
+ * before parent fired UserPromptSubmit, hook emitter dropped, etc.). Returns
+ * the number of rows updated.
+ */
+export function cancelStaleSubagents(
+  db: Database,
+  maxAgeHours: number,
+  now: number = Date.now(),
+): number {
+  const cutoff = new Date(now - maxAgeHours * 60 * 60 * 1000).toISOString()
+  const nowIso = new Date(now).toISOString()
+  const result = db
+    .query<{ changes: number }, { $now: string; $cutoff: string }>(
+      `UPDATE subagents SET status='cancelled', ended_at=$now
+       WHERE status='running' AND started_at < $cutoff`,
+    )
+    .run({ $now: nowIso, $cutoff: cutoff }) as unknown as { changes: number }
+  return result.changes
+}
+
+/**
  * Delete attachment rows + their on-disk files whose expires_at has passed.
  * Returns the number of attachments pruned. Called from the nightly retention
  * pass alongside pruneOldEvents.

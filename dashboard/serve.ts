@@ -50,7 +50,11 @@ import {
 import type { Attachment } from '../src/types.js'
 import { randomBytes } from 'node:crypto'
 import { buildTranscript, filterAfterUuid } from '../src/transcript.js'
-import { pruneOldEvents, pruneExpiredAttachments } from '../src/storage/retention.js'
+import {
+  pruneOldEvents,
+  pruneExpiredAttachments,
+  cancelStaleSubagents,
+} from '../src/storage/retention.js'
 import { rollupDailyMetrics, hourlyToolCalls } from '../src/storage/metrics.js'
 import {
   verifyPassword,
@@ -1162,6 +1166,8 @@ async function main(): Promise<void> {
     if (rolled > 0) console.log(`  Metrics:   rolled up ${rolled} daily rows`)
     const attPruned = pruneExpiredAttachments(db)
     if (attPruned > 0) console.log(`  Retention: pruned ${attPruned} expired attachments`)
+    const staleSubs = cancelStaleSubagents(db, 24)
+    if (staleSubs > 0) console.log(`  Retention: cancelled ${staleSubs} stale subagents`)
   } catch (err) {
     console.error('  Warning: retention/rollup failed:', err)
   }

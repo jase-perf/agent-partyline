@@ -72,6 +72,27 @@ export class Aggregator {
         .run({ $a: ev.agent_id, $ts: ev.ts })
     }
 
+    // Cancel orphaned subagents when the parent turn ends without a clean
+    // SubagentStop. Claude Code skips SubagentStop when the user hits ESC
+    // mid-Task — the subagent process is killed before its hook fires, so
+    // the row stays 'running' forever. Detect end-of-turn via the parent's
+    // next UserPromptSubmit, or a SessionStart/SessionEnd. Events tagged
+    // with an agent_id come from inside a subagent and must not trigger
+    // cancellation — those are the subagent's own hook events.
+    if (
+      !ev.agent_id &&
+      (ev.hook_event === 'UserPromptSubmit' ||
+        ev.hook_event === 'SessionStart' ||
+        ev.hook_event === 'SessionEnd')
+    ) {
+      this.db
+        .query(
+          `UPDATE subagents SET status='cancelled', ended_at=$ts
+           WHERE session_id=$s AND status='running'`,
+        )
+        .run({ $s: ev.session_id, $ts: ev.ts })
+    }
+
     if (ev.hook_event === 'PostToolUse') {
       const p = ev.payload as {
         tool_name?: string
@@ -107,9 +128,10 @@ export class Aggregator {
       .get({ $id: key })
     if (byId) return byId
     const byName = this.db
-      .query<SessionRow, { $name: string }>(
-        'SELECT * FROM sessions WHERE name=$name ORDER BY last_seen DESC LIMIT 1',
-      )
+      .query<
+        SessionRow,
+        { $name: string }
+      >('SELECT * FROM sessions WHERE name=$name ORDER BY last_seen DESC LIMIT 1')
       .get({ $name: key })
     return byName ?? null
   }
@@ -119,15 +141,14 @@ export class Aggregator {
     const resolved = this.getSession(sessionKey)
     const uuid = resolved?.session_id ?? sessionKey
     return this.db
-      .query<SubagentRow, { $s: string }>(
-        'SELECT * FROM subagents WHERE session_id=$s ORDER BY started_at DESC',
-      )
+      .query<
+        SubagentRow,
+        { $s: string }
+      >('SELECT * FROM subagents WHERE session_id=$s ORDER BY started_at DESC')
       .all({ $s: uuid })
   }
 
   listSessions(): SessionRow[] {
-    return this.db
-      .query<SessionRow, []>('SELECT * FROM sessions ORDER BY last_seen DESC')
-      .all()
+    return this.db.query<SessionRow, []>('SELECT * FROM sessions ORDER BY last_seen DESC').all()
   }
 }

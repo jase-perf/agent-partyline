@@ -1536,6 +1536,9 @@ section[data-view='session-detail'] .detail-send {
 #detail-tree li .dot.errored {
   background: var(--red);
 }
+#detail-tree li .dot.cancelled {
+  background: var(--text-dim);
+}
 #detail-tree .agent-group > details > summary {
   cursor: pointer;
   color: var(--text-dim);

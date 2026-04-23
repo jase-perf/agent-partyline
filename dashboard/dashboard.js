@@ -2009,7 +2009,11 @@ function renderAgentTree() {
       details.open = true
     }
     const summary = document.createElement('summary')
-    summary.textContent = 'Completed (' + completed.length + ')'
+    const cancelledCount = completed.filter((sa) => sa.status === 'cancelled').length
+    summary.textContent =
+      cancelledCount > 0
+        ? 'Past (' + completed.length + ', ' + cancelledCount + ' cancelled)'
+        : 'Past (' + completed.length + ')'
     details.appendChild(summary)
     const subUl = document.createElement('ul')
     subUl.className = 'agent-group-list'
