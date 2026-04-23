@@ -933,7 +933,10 @@ const server = Bun.serve({
       if (explicitUuid) {
         // DB-backed read for an archived uuid (or the live uuid if explicitly
         // requested). Bypasses the live aggregator + JSONL path entirely.
-        const uuidLimit = parseInt(url.searchParams.get('limit') ?? '200', 10)
+        const uuidLimitRaw = parseInt(url.searchParams.get('limit') ?? '200', 10)
+        const uuidLimit = Number.isFinite(uuidLimitRaw)
+          ? Math.min(Math.max(uuidLimitRaw, 1), 1000)
+          : 200
         return Response.json(buildArchiveTranscriptResponse(db, sidParam, explicitUuid, uuidLimit))
       }
       // Prefer the currently-registered ccpl session UUID (authoritative for

@@ -74,4 +74,23 @@ describe('buildArchiveTranscriptResponse', () => {
     expect(result.envelopes).toHaveLength(1)
     expect(result.envelopes[0]!.id).toBe('env-1')
   })
+
+  test('respects limit and orders envelopes by ts ASC', () => {
+    // Three messages out of insertion order — verify ORDER BY ts ASC + LIMIT
+    for (const [id, ts] of [
+      ['env-c', 3000],
+      ['env-a', 1000],
+      ['env-b', 2000],
+    ] as Array<[string, number]>) {
+      db.query(
+        `INSERT INTO messages (id, ts, from_name, to_name, type, body, callback_id, response_to, cc_session_uuid)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, ts, 'foo', 'bar', 'message', 'x', null, null, 'arch')
+    }
+    const result = buildArchiveTranscriptResponse(db, 'foo', 'arch', 2)
+    // Limit honored
+    expect(result.envelopes).toHaveLength(2)
+    // Ascending by ts: env-a (1000) first, env-b (2000) second; env-c (3000) is excluded by limit=2.
+    expect(result.envelopes.map((e) => e.id)).toEqual(['env-a', 'env-b'])
+  })
 })
