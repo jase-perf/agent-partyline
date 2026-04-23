@@ -269,8 +269,14 @@ function connect() {
   }
 
   ws.onclose = function (e) {
-    // Auth failure (1006 abnormal close during handshake, or 4401) → redirect to login.
-    if (e.code === 1006 || e.code === 4401) {
+    // Auth failure: only the explicit 4401 close code from the switchboard
+    // indicates the dashboard cookie was rejected. Code 1006 means "abnormal
+    // closure" and fires on every mobile background/screen-lock/network blip
+    // — treating it as auth failure forced a re-login every time the user
+    // came back to the tab on Android. Just reconnect on 1006; let the next
+    // /ws/observer handshake decide whether the cookie is still valid (which
+    // would close cleanly with 4401 if it isn't).
+    if (e.code === 4401) {
       var nextPath = location.pathname + location.hash
       location.href = '/login?next=' + encodeURIComponent(nextPath)
       return
