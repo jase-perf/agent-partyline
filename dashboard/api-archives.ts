@@ -21,3 +21,23 @@ export async function handleApiArchives(req: Request, db: Database): Promise<Res
   const result = listArchivesForSession(db, name, LABEL_MAX_LEN)
   return Response.json(result)
 }
+
+const TOOLTIP_MAX_LEN = 200
+
+/**
+ * GET /api/archive-label?uuid=<uuid>
+ *   → { label: string | null }
+ *
+ * Returns the same last-assistant-text basis as the row label, but
+ * truncated to 200 chars for the hover tooltip. Loaded lazily on hover
+ * so the History list itself stays cheap.
+ */
+export async function handleApiArchiveLabel(req: Request, db: Database): Promise<Response> {
+  const url = new URL(req.url)
+  const uuid = url.searchParams.get('uuid')
+  if (!uuid) {
+    return Response.json({ error: 'uuid param required' }, { status: 400 })
+  }
+  const { archiveLabel } = await import('../src/storage/transcript-entries.js')
+  return Response.json({ label: archiveLabel(db, uuid, TOOLTIP_MAX_LEN) })
+}

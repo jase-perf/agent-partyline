@@ -77,4 +77,38 @@ describe('/api/archives endpoint', () => {
     expect(body.archives[0]!.uuid).toBe('archived-uuid')
     expect(body.archives[0]!.label).toBe('archived label')
   })
+
+  test('archive-label returns 200-char tooltip body for a uuid', async () => {
+    insertEntry(db, {
+      cc_session_uuid: 'u1',
+      seq: 0,
+      session_name: null,
+      ts: '2026-04-22T00:00:00Z',
+      kind: 'assistant-text',
+      uuid: 'x',
+      body_json: JSON.stringify({ text: 'a'.repeat(500) }),
+      created_at: Date.now(),
+    })
+    const { handleApiArchiveLabel } = require('../dashboard/api-archives.js')
+    const req = new Request('http://x/api/archive-label?uuid=u1')
+    const res = await handleApiArchiveLabel(req, db)
+    const body = (await res.json()) as { label: string | null }
+    expect(body.label?.length).toBe(200)
+    expect(body.label?.endsWith('…')).toBe(true)
+  })
+
+  test('archive-label returns null when no assistant-text entries exist', async () => {
+    const { handleApiArchiveLabel } = require('../dashboard/api-archives.js')
+    const req = new Request('http://x/api/archive-label?uuid=ghost')
+    const res = await handleApiArchiveLabel(req, db)
+    const body = (await res.json()) as { label: string | null }
+    expect(body.label).toBeNull()
+  })
+
+  test('archive-label returns 400 when uuid param missing', async () => {
+    const { handleApiArchiveLabel } = require('../dashboard/api-archives.js')
+    const req = new Request('http://x/api/archive-label')
+    const res = await handleApiArchiveLabel(req, db)
+    expect(res.status).toBe(400)
+  })
 })

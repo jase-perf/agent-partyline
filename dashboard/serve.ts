@@ -76,7 +76,7 @@ import {
   defaultDeleteTokenFile,
 } from '../src/server/ccpl-api.js'
 import { createSwitchboard } from '../src/server/switchboard.js'
-import { handleApiArchives } from './api-archives.js'
+import { handleApiArchives, handleApiArchiveLabel } from './api-archives.js'
 
 // --- Args ---
 
@@ -669,6 +669,11 @@ const server = Bun.serve({
     // GET /api/archives?session=<name> — per-session History list
     if (url.pathname === '/api/archives' && req.method === 'GET') {
       return handleApiArchives(req, db)
+    }
+
+    // GET /api/archive-label?uuid=<uuid> — 200-char tooltip body for History hover
+    if (url.pathname === '/api/archive-label' && req.method === 'GET') {
+      return handleApiArchiveLabel(req, db)
     }
 
     // REST API: get context overrides
