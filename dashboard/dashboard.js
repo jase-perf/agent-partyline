@@ -1850,6 +1850,8 @@ async function loadSessionDetailView() {
     console.warn('session fetch failed', e)
   }
 
+  renderHistorySidebar(selectedSessionId, null)
+
   // selectedAgentId is set by the router before loadSessionDetailView is called;
   // do not reset it here so deep-linked agent views are honoured.
   await renderStream()
@@ -3277,3 +3279,114 @@ fetch('/api/quota')
   })
 
 connect()
+
+// --- Session-detail HISTORY sidebar -----------------------------------------
+// Renders the right-hand sidebar's HISTORY section with one row per
+// live + archived cc_session_uuid for the selected session. Backend endpoints
+// /api/archives and /api/archive-label feed this.
+
+async function renderHistorySidebar(sessionName, currentArchiveUuid) {
+  var el = document.getElementById('detail-history')
+  if (!el) return
+  el.replaceChildren()
+  var res = await fetch('/api/archives?session=' + encodeURIComponent(sessionName))
+  if (!res.ok) {
+    var errLi = document.createElement('li')
+    errLi.className = 'history-row'
+    errLi.style.color = 'var(--text-dim)'
+    errLi.textContent = 'unable to load'
+    el.appendChild(errLi)
+    return
+  }
+  var data = await res.json()
+  if (data.live) {
+    el.appendChild(makeHistoryRow(sessionName, data.live, true, currentArchiveUuid))
+  }
+  for (var i = 0; i < data.archives.length; i++) {
+    el.appendChild(makeHistoryRow(sessionName, data.archives[i], false, currentArchiveUuid))
+  }
+  if (!data.live && data.archives.length === 0) {
+    var empty = document.createElement('li')
+    empty.className = 'history-row'
+    empty.style.color = 'var(--text-dim)'
+    empty.textContent = '(no history yet)'
+    el.appendChild(empty)
+  }
+}
+
+function makeHistoryRow(sessionName, item, isLive, selectedUuid) {
+  var li = document.createElement('li')
+  li.className = 'history-row' + (isLive ? ' history-row-live' : '')
+  if ((isLive && !selectedUuid) || item.uuid === selectedUuid) {
+    li.classList.add('selected')
+  }
+  var label = document.createElement('div')
+  label.className = 'history-row-label'
+  label.textContent = item.label || (isLive ? 'LIVE' : '(no transcript)')
+  li.appendChild(label)
+  var meta = document.createElement('div')
+  meta.className = 'history-row-meta'
+  meta.textContent = isLive ? 'LIVE' : relativeTime(item.archived_at)
+  li.appendChild(meta)
+  li.addEventListener('click', function () {
+    var state = isLive
+      ? { view: 'session-detail', sessionName: sessionName, agentId: null, archiveUuid: null }
+      : {
+          view: 'session-detail',
+          sessionName: sessionName,
+          agentId: null,
+          archiveUuid: item.uuid,
+        }
+    pushRoute(state)
+    applyRoute(state, { skipPush: true })
+  })
+  attachHistoryTooltip(li, item.uuid)
+  return li
+}
+
+function relativeTime(ms) {
+  var diff = Date.now() - ms
+  var sec = Math.floor(diff / 1000)
+  if (sec < 60) return sec + 's ago'
+  var min = Math.floor(sec / 60)
+  if (min < 60) return min + 'm ago'
+  var hr = Math.floor(min / 60)
+  if (hr < 24) return hr + 'h ago'
+  var day = Math.floor(hr / 24)
+  if (day < 30) return day + 'd ago'
+  return new Date(ms).toLocaleDateString()
+}
+
+var __historyTooltipCache = {}
+function attachHistoryTooltip(li, uuid) {
+  var tipEl = null
+  li.addEventListener('mouseenter', async function () {
+    var label = __historyTooltipCache[uuid]
+    if (label === undefined) {
+      try {
+        var r = await fetch('/api/archive-label?uuid=' + encodeURIComponent(uuid))
+        if (r.ok) {
+          var b = await r.json()
+          label = b.label
+        } else {
+          label = null
+        }
+      } catch (e) {
+        label = null
+      }
+      __historyTooltipCache[uuid] = label
+    }
+    if (!label) return
+    tipEl = document.createElement('div')
+    tipEl.className = 'history-tooltip'
+    tipEl.textContent = label
+    document.body.appendChild(tipEl)
+    var rect = li.getBoundingClientRect()
+    tipEl.style.left = rect.right + 8 + 'px'
+    tipEl.style.top = rect.top + 'px'
+  })
+  li.addEventListener('mouseleave', function () {
+    if (tipEl && tipEl.parentNode) tipEl.parentNode.removeChild(tipEl)
+    tipEl = null
+  })
+}
