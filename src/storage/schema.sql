@@ -149,3 +149,25 @@ CREATE TABLE IF NOT EXISTS attachments (
 CREATE INDEX IF NOT EXISTS idx_attachments_envelope ON attachments(envelope_id);
 CREATE INDEX IF NOT EXISTS idx_attachments_expires ON attachments(expires_at);
 CREATE INDEX IF NOT EXISTS idx_attachments_uploader ON attachments(uploader_session);
+
+-- transcript_entries: per-line copy of every Claude Code JSONL entry,
+-- streamed in by TranscriptIngester (src/observers/transcript-ingester.ts).
+-- This table is the durable source of truth for archived conversations and
+-- is queried by /api/archives + /api/archive-label + /api/transcript?uuid=...
+-- when rendering a read-only archive view. Live session-detail rendering
+-- still reads JSONL directly until a follow-up flips that path too.
+CREATE TABLE IF NOT EXISTS transcript_entries (
+  cc_session_uuid TEXT NOT NULL,
+  seq             INTEGER NOT NULL,
+  session_name    TEXT,
+  ts              TEXT NOT NULL,
+  kind            TEXT NOT NULL,
+  uuid            TEXT,
+  body_json       TEXT NOT NULL,
+  created_at      INTEGER NOT NULL,
+  PRIMARY KEY (cc_session_uuid, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_transcript_entries_name_uuid
+  ON transcript_entries(session_name, cc_session_uuid);
+CREATE INDEX IF NOT EXISTS idx_transcript_entries_uuid_kind_seq
+  ON transcript_entries(cc_session_uuid, kind, seq);

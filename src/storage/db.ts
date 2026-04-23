@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SCHEMA_PATH = join(__dirname, 'schema.sql')
 
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 
 type Migration = (db: Database) => void
 
@@ -188,6 +188,29 @@ const MIGRATIONS: Record<number, Migration> = {
       CREATE INDEX IF NOT EXISTS idx_attachments_uploader ON attachments(uploader_session);
     `
     db.exec(sql)
+  },
+
+  // v5→v6: add `transcript_entries` table for streaming Claude Code JSONL
+  // turns into SQLite. See spec
+  // docs/superpowers/specs/2026-04-22-transcript-persistence-history-resume-design.md
+  6: (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS transcript_entries (
+        cc_session_uuid TEXT NOT NULL,
+        seq             INTEGER NOT NULL,
+        session_name    TEXT,
+        ts              TEXT NOT NULL,
+        kind            TEXT NOT NULL,
+        uuid            TEXT,
+        body_json       TEXT NOT NULL,
+        created_at      INTEGER NOT NULL,
+        PRIMARY KEY (cc_session_uuid, seq)
+      );
+      CREATE INDEX IF NOT EXISTS idx_transcript_entries_name_uuid
+        ON transcript_entries(session_name, cc_session_uuid);
+      CREATE INDEX IF NOT EXISTS idx_transcript_entries_uuid_kind_seq
+        ON transcript_entries(cc_session_uuid, kind, seq);
+    `)
   },
 }
 
