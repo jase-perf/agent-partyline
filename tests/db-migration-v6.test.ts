@@ -14,8 +14,8 @@ describe('schema v6 — transcript_entries table', () => {
     } catch {}
   })
 
-  test('SCHEMA_VERSION is 6', () => {
-    expect(SCHEMA_VERSION).toBe(6)
+  test('SCHEMA_VERSION is at least 6', () => {
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(6)
   })
 
   test('fresh DB has transcript_entries with PK (cc_session_uuid, seq)', () => {
@@ -48,7 +48,23 @@ describe('schema v6 — transcript_entries table', () => {
     dir = mkdtempSync(join(tmpdir(), 'pl-schema-v5to6-'))
     const path = join(dir, 'v5.db')
     const raw = new Database(path, { create: true })
-    raw.exec('PRAGMA user_version = 5')
+    // Migrations chain forward to SCHEMA_VERSION, so we need the ccpl_sessions
+    // table to exist for the v6→v7 migration's CREATE INDEX to succeed.
+    raw.exec(`
+      CREATE TABLE ccpl_sessions (
+        name TEXT PRIMARY KEY,
+        token TEXT NOT NULL UNIQUE,
+        cwd TEXT NOT NULL,
+        cc_session_uuid TEXT,
+        pid INTEGER,
+        machine_id TEXT,
+        online INTEGER NOT NULL DEFAULT 0,
+        revision INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        last_active_at INTEGER NOT NULL
+      );
+      PRAGMA user_version = 5;
+    `)
     raw.close()
     const db = openDb(path)
     const tables = db
@@ -56,7 +72,7 @@ describe('schema v6 — transcript_entries table', () => {
       .all()
     expect(tables.length).toBe(1)
     const v = db.query<{ user_version: number }, []>('PRAGMA user_version').get()!
-    expect(v.user_version).toBe(6)
+    expect(v.user_version).toBe(SCHEMA_VERSION)
     db.close()
   })
 })

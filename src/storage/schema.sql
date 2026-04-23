@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS ccpl_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_ccpl_sessions_token ON ccpl_sessions(token);
 CREATE INDEX IF NOT EXISTS idx_ccpl_sessions_last_active ON ccpl_sessions(last_active_at);
+CREATE INDEX IF NOT EXISTS idx_ccpl_sessions_cc_uuid ON ccpl_sessions(cc_session_uuid);
 
 CREATE TABLE IF NOT EXISTS ccpl_archives (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

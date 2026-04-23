@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SCHEMA_PATH = join(__dirname, 'schema.sql')
 
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
 type Migration = (db: Database) => void
 
@@ -211,6 +211,16 @@ const MIGRATIONS: Record<number, Migration> = {
       CREATE INDEX IF NOT EXISTS idx_transcript_entries_uuid_kind_seq
         ON transcript_entries(cc_session_uuid, kind, seq);
     `)
+  },
+
+  // v6→v7: add an index on ccpl_sessions.cc_session_uuid so
+  // TranscriptIngester.lookupSessionName (called per JSONL line by the
+  // observer once Task 7 wires it into production) is an indexed lookup
+  // rather than a table scan.
+  7: (db) => {
+    db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_ccpl_sessions_cc_uuid ON ccpl_sessions(cc_session_uuid)`,
+    )
   },
 }
 
