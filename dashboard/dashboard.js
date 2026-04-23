@@ -3360,7 +3360,9 @@ function relativeTime(ms) {
 var __historyTooltipCache = {}
 function attachHistoryTooltip(li, uuid) {
   var tipEl = null
+  var isHovered = false
   li.addEventListener('mouseenter', async function () {
+    isHovered = true
     var label = __historyTooltipCache[uuid]
     if (label === undefined) {
       try {
@@ -3376,7 +3378,8 @@ function attachHistoryTooltip(li, uuid) {
       }
       __historyTooltipCache[uuid] = label
     }
-    if (!label) return
+    // Bail if the user moved away while we were fetching.
+    if (!isHovered || !label) return
     tipEl = document.createElement('div')
     tipEl.className = 'history-tooltip'
     tipEl.textContent = label
@@ -3386,6 +3389,7 @@ function attachHistoryTooltip(li, uuid) {
     tipEl.style.top = rect.top + 'px'
   })
   li.addEventListener('mouseleave', function () {
+    isHovered = false
     if (tipEl && tipEl.parentNode) tipEl.parentNode.removeChild(tipEl)
     tipEl = null
   })
