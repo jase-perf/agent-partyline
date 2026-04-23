@@ -475,6 +475,43 @@ describe('switchboard', () => {
     cleanup()
   })
 
+  test('routeEnvelope stamps messages.cc_session_uuid from sender row', () => {
+    const a = registerSession(db, 'a', '/tmp')
+    registerSession(db, 'b', '/tmp')
+    const sb = createSwitchboard(db)
+    const wsA = fakeWs('session')
+    sb.handleSessionHello(wsA, {
+      token: a.token,
+      name: 'a',
+      cc_session_uuid: 'uuid-A',
+      pid: 1,
+      machine_id: null,
+    })
+    sb.handleSessionFrame(wsA, { type: 'send', to: 'b', body: 'hi', client_ref: 'r1' })
+    const row = db
+      .query(`SELECT cc_session_uuid FROM messages WHERE from_name = ? LIMIT 1`)
+      .get('a') as { cc_session_uuid: string | null }
+    expect(row.cc_session_uuid).toBe('uuid-A')
+  })
+
+  test('routeEnvelope stamps null for envelopes without a sender row (e.g. dashboard)', () => {
+    const sb = createSwitchboard(db)
+    sb.routeEnvelope({
+      id: 'env-1',
+      ts: 1000,
+      from: 'dashboard',
+      to: 'nobody',
+      envelope_type: 'message',
+      body: 'x',
+      callback_id: null,
+      response_to: null,
+    })
+    const row = db.query(`SELECT cc_session_uuid FROM messages WHERE id = ?`).get('env-1') as {
+      cc_session_uuid: string | null
+    }
+    expect(row.cc_session_uuid).toBeNull()
+  })
+
   test('uuid-rotate with mismatched old_uuid still archives current uuid', () => {
     const row = registerSession(db, 'foo', '/tmp')
     const sb = createSwitchboard(db)

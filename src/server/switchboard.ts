@@ -96,6 +96,14 @@ export function createSwitchboard(db: Database): Switchboard {
   }
 
   function routeEnvelope(envelope: Envelope): void {
+    // Stamp the sender's current cc_session_uuid so messages can be filtered
+    // per archived conversation in the archive viewer. Dashboard-originated
+    // envelopes (envelope.from === 'dashboard') and any unknown sender stay
+    // as null — the archive view shows them in the LIVE row by default.
+    const senderRow =
+      envelope.from && envelope.from !== 'dashboard' ? getSessionByName(db, envelope.from) : null
+    const ccUuid = senderRow?.cc_session_uuid ?? null
+
     insertMessage(db, {
       id: envelope.id,
       ts: envelope.ts,
@@ -105,7 +113,7 @@ export function createSwitchboard(db: Database): Switchboard {
       body: envelope.body,
       callback_id: envelope.callback_id,
       response_to: envelope.response_to,
-      cc_session_uuid: null,
+      cc_session_uuid: ccUuid,
     })
 
     const payload = JSON.stringify({ type: 'envelope', ...envelope })
