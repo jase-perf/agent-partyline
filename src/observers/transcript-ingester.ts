@@ -1,5 +1,6 @@
 import type { Database } from 'bun:sqlite'
-import { basename } from 'node:path'
+import { basename, join } from 'node:path'
+import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import type { JsonlObserver, JsonlUpdate } from './jsonl'
 import { insertEntry, deleteEntriesForUuid } from '../storage/transcript-entries'
 import { getSessionByCcUuid } from '../storage/ccpl-queries'
@@ -26,6 +27,70 @@ export class TranscriptIngester {
   subscribe(observer: JsonlObserver): void {
     observer.on((u) => this.handleUpdate(u))
     observer.onReset((path) => this.handleReset(path))
+  }
+
+  /**
+   * One-shot read of the JSONL file for `ccUuid` and bulk-insert every line.
+   * No-op if the uuid already has rows in transcript_entries (the streaming
+   * path is taking care of it). Returns the number of rows actually inserted.
+   *
+   * Used by reconcileCcSessionUuid via onUuidAdopted when the resumed uuid
+   * is a stranger we've never seen before (Case B in the spec).
+   */
+  backfillFromUuid(ccUuid: string): number {
+    const existing = this.db
+      .query(`SELECT COUNT(*) AS n FROM transcript_entries WHERE cc_session_uuid = ?`)
+      .get(ccUuid) as { n: number }
+    if (existing.n > 0) return 0
+
+    const filePath = this.findJsonlForUuid(ccUuid)
+    if (!filePath) return 0
+
+    let raw: string
+    try {
+      raw = readFileSync(filePath, 'utf-8')
+    } catch {
+      return 0
+    }
+
+    const sessionName = this.lookupSessionName(ccUuid)
+    const lines = raw.split('\n').filter((l) => l.trim().length > 0)
+    let seq = 0
+    const insertMany = this.db.transaction(() => {
+      for (const line of lines) {
+        let entry: Record<string, unknown>
+        try {
+          entry = JSON.parse(line) as Record<string, unknown>
+        } catch {
+          continue
+        }
+        insertEntry(this.db, {
+          cc_session_uuid: ccUuid,
+          seq,
+          session_name: sessionName,
+          ts: extractTs(entry),
+          kind: deriveKind(entry),
+          uuid: extractUuid(entry),
+          body_json: JSON.stringify(entry),
+          created_at: Date.now(),
+        })
+        seq++
+      }
+    })
+    insertMany()
+    this.nextSeq.set(ccUuid, seq)
+    return seq
+  }
+
+  /** Walk the projectsRoot for a `<ccUuid>.jsonl` file. */
+  private findJsonlForUuid(ccUuid: string): string | null {
+    if (!existsSync(this._projectsRoot)) return null
+    for (const cwdDir of readdirSync(this._projectsRoot, { withFileTypes: true })) {
+      if (!cwdDir.isDirectory()) continue
+      const candidate = join(this._projectsRoot, cwdDir.name, `${ccUuid}.jsonl`)
+      if (existsSync(candidate)) return candidate
+    }
+    return null
   }
 
   private handleUpdate(u: JsonlUpdate): void {

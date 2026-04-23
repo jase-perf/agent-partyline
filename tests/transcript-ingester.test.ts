@@ -127,4 +127,55 @@ describe('TranscriptIngester', () => {
     const rows = transcriptForUuid(db, 'uuid-4', 10)
     expect(rows[0]!.session_name).toBe('foo')
   })
+
+  test('backfillFromUuid bulk-inserts the entire jsonl file when no rows exist', async () => {
+    const cwd = join(projectsRoot, 'p5')
+    mkdirSync(cwd, { recursive: true })
+    const jsonl = join(cwd, 'stranger-uuid.jsonl')
+    writeFileSync(
+      jsonl,
+      JSON.stringify({ type: 'user', uuid: 'h1', text: 'past 1' }) +
+        '\n' +
+        JSON.stringify({ type: 'assistant', uuid: 'h2', text: 'past 2' }) +
+        '\n' +
+        JSON.stringify({ type: 'user', uuid: 'h3', text: 'past 3' }) +
+        '\n',
+    )
+    const ingester = new TranscriptIngester(db, projectsRoot)
+    const inserted = ingester.backfillFromUuid('stranger-uuid')
+    expect(inserted).toBe(3)
+    const rows = transcriptForUuid(db, 'stranger-uuid', 100)
+    expect(rows.length).toBe(3)
+    expect(rows.map((r) => r.seq)).toEqual([0, 1, 2])
+    expect(rows.map((r) => r.kind)).toEqual(['user', 'assistant-text', 'user'])
+  })
+
+  test('backfillFromUuid is a no-op when entries already exist for that uuid', async () => {
+    insertEntry(db, {
+      cc_session_uuid: 'already',
+      seq: 0,
+      session_name: null,
+      ts: new Date().toISOString(),
+      kind: 'user',
+      uuid: 'pre',
+      body_json: '{}',
+      created_at: Date.now(),
+    })
+    const cwd = join(projectsRoot, 'p6')
+    mkdirSync(cwd, { recursive: true })
+    const jsonl = join(cwd, 'already.jsonl')
+    writeFileSync(jsonl, JSON.stringify({ type: 'user', uuid: 'x' }) + '\n')
+    const ingester = new TranscriptIngester(db, projectsRoot)
+    const inserted = ingester.backfillFromUuid('already')
+    expect(inserted).toBe(0)
+    const rows = transcriptForUuid(db, 'already', 10)
+    expect(rows.length).toBe(1)
+    expect(rows[0]!.uuid).toBe('pre')
+  })
+
+  test('backfillFromUuid returns 0 when no jsonl file is found anywhere under projectsRoot', () => {
+    const ingester = new TranscriptIngester(db, projectsRoot)
+    expect(ingester.backfillFromUuid('does-not-exist')).toBe(0)
+    expect(transcriptForUuid(db, 'does-not-exist', 10).length).toBe(0)
+  })
 })
