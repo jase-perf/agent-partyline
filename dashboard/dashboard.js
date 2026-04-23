@@ -94,7 +94,7 @@ fetch('/api/self')
   .catch(() => {})
 let selectedSessionId = null
 let selectedAgentId = null
-var selectedArchiveUuid = null
+let selectedArchiveUuid = null
 let currentSessionSubagents = []
 var historyBuffer = []
 
@@ -3433,6 +3433,7 @@ function attachHistoryTooltip(li, uuid) {
 // --- Archive view mode: banner + read-only send bar -------------------------
 // Toggles the archive banner above the session header and disables the
 // send composer so the user can't try to message into a frozen archive.
+var __archiveBackHandler = null
 function setArchiveMode(sessionName, archiveUuid) {
   var banner = document.getElementById('archive-banner')
   var sendBar = document.querySelector('.detail-send')
@@ -3442,7 +3443,9 @@ function setArchiveMode(sessionName, archiveUuid) {
     if (txt) txt.textContent = 'Viewing archive · uuid ' + archiveUuid.slice(0, 8) + '…'
     var back = document.getElementById('archive-back-link')
     if (back) {
-      back.onclick = function (ev) {
+      // Remove any prior handler so we don't accumulate listeners across navigations.
+      if (__archiveBackHandler) back.removeEventListener('click', __archiveBackHandler)
+      __archiveBackHandler = function (ev) {
         ev.preventDefault()
         var liveState = {
           view: 'session-detail',
@@ -3453,10 +3456,17 @@ function setArchiveMode(sessionName, archiveUuid) {
         pushRoute(liveState)
         applyRoute(liveState, { skipPush: true })
       }
+      back.addEventListener('click', __archiveBackHandler)
     }
-    if (sendBar) sendBar.classList.add('archive-readonly')
+    if (sendBar) {
+      sendBar.classList.add('archive-readonly')
+      sendBar.setAttribute('aria-hidden', 'true')
+    }
   } else {
     if (banner) banner.hidden = true
-    if (sendBar) sendBar.classList.remove('archive-readonly')
+    if (sendBar) {
+      sendBar.classList.remove('archive-readonly')
+      sendBar.removeAttribute('aria-hidden')
+    }
   }
 }
