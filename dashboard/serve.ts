@@ -31,6 +31,7 @@ import { handleIngest } from '../src/ingest/http.js'
 import { loadOrCreateToken } from '../src/ingest/auth.js'
 import { getMachineId } from '../src/machine-id.js'
 import { JsonlObserver } from '../src/observers/jsonl.js'
+import { TranscriptIngester } from '../src/observers/transcript-ingester.js'
 import { GeminiTranscriptObserver } from '../src/observers/gemini-transcript.js'
 import { recentEvents } from '../src/storage/queries.js'
 import {
@@ -129,8 +130,21 @@ const token = loadOrCreateToken(TOKEN_PATH)
 const machineId = getMachineId(MACHINE_ID_PATH)
 const aggregator = new Aggregator(db)
 
+// JSONL observer + transcript ingester (ingester must exist before
+// switchboard so we can wire onUuidAdopted to backfillFromUuid).
+const jsonlRoot = join(process.env.HOME ?? '/home/claude', '.claude', 'projects')
+const jsonlObserver = new JsonlObserver(jsonlRoot)
+const transcriptIngester = new TranscriptIngester(db, jsonlRoot)
+transcriptIngester.subscribe(jsonlObserver)
+
 // --- Hub-and-spoke switchboard (v2 transport) ---
-const switchboard = createSwitchboard(db)
+const switchboard = createSwitchboard(db, {
+  onUuidAdopted: (_name, uuid, _reason) => {
+    // Resume into a stranger uuid → bulk-load the existing JSONL once so
+    // the History view has the full conversation, not just post-resume.
+    transcriptIngester.backfillFromUuid(uuid)
+  },
+})
 
 aggregator.onUpdate((session) => {
   // Enrich the broadcast session row with live active-subagent count so the
@@ -148,9 +162,6 @@ aggregator.onUpdate((session) => {
   })
 })
 
-const jsonlObserver = new JsonlObserver(
-  join(process.env.HOME ?? '/home/claude', '.claude', 'projects'),
-)
 /**
  * Pull model + usage + last assistant text out of a JSONL assistant record
  * and upsert into the aggregator's sessions table. Claude Code hook
