@@ -576,4 +576,21 @@ describe('switchboard', () => {
     expect(row.session_name).toBe('foo')
     cleanup()
   })
+
+  test('onUuidAdopted callback exception does not break reconcileCcSessionUuid', () => {
+    registerSession(db, 'foo', '/tmp')
+    const sb = createSwitchboard(db, {
+      onUuidAdopted: () => {
+        throw new Error('boom')
+      },
+    })
+    // The reconcile call must not throw.
+    expect(() => sb.reconcileCcSessionUuid('foo', 'uuid-1', 'hook_drift')).not.toThrow()
+    // Adoption still happened (cc_session_uuid was updated before the callback fired).
+    const row = db.query(`SELECT cc_session_uuid FROM ccpl_sessions WHERE name = ?`).get('foo') as {
+      cc_session_uuid: string
+    }
+    expect(row.cc_session_uuid).toBe('uuid-1')
+    cleanup()
+  })
 })

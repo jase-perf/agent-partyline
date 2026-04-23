@@ -201,7 +201,12 @@ export function createSwitchboard(db: Database, opts: SwitchboardOpts = {}): Swi
     const fresh = getSessionByName(db, name)
     if (fresh) emitSessionDelta(fresh, { cc_session_uuid: fresh.cc_session_uuid })
     // Notify callers (dashboard wires this to TranscriptIngester.backfillFromUuid).
-    opts.onUuidAdopted?.(name, newUuid, reason)
+    // Side-effect — never let a callback exception break reconcile semantics.
+    try {
+      opts.onUuidAdopted?.(name, newUuid, reason)
+    } catch {
+      /* ignore — callback misbehavior is not reconcile's concern */
+    }
   }
 
   return {
