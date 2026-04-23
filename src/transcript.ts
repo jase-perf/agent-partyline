@@ -400,35 +400,46 @@ function recordToEntries(
 // ---------------------------------------------------------------------------
 
 /**
- * Build a structured transcript from a Claude Code JSONL session file.
- * If agentId is provided, reads the subagent transcript instead.
+ * Fold raw JSONL records (already parsed from disk OR loaded from DB) into
+ * TranscriptEntry[] with envelopes interleaved by ts. Extracted from
+ * buildTranscript so the DB-backed archive viewer can reuse the same
+ * render-shape.
  */
-export function buildTranscript(opts: BuildTranscriptOptions): TranscriptEntry[] {
-  const { projectsRoot, sessionId, agentId, limit } = opts
-
-  const cwdSlug = findCwdSlug(projectsRoot, sessionId)
-  if (cwdSlug === null) return []
-
-  const jsonlPath = agentId
-    ? join(projectsRoot, cwdSlug, sessionId, 'subagents', `agent-${agentId}.jsonl`)
-    : join(projectsRoot, cwdSlug, `${sessionId}.jsonl`)
-
-  const records = readJsonlLines(jsonlPath)
+export function recordsToTranscript(
+  records: Record<string, unknown>[],
+  projectsRoot: string,
+  cwdSlug: string,
+  sessionId: string,
+  sessionName: string | undefined,
+  envelopes: PartyLineEnvelope[] | undefined,
+  limit: number,
+): TranscriptEntry[] {
   const pendingToolUses = new Map<string, { name: string; input: unknown }>()
   const entries: TranscriptEntry[] = []
-
   for (const rec of records) {
-    const newEntries = recordToEntries(rec, pendingToolUses, projectsRoot, cwdSlug, sessionId)
+    // Accept both shapes: already-flattened JsonlRecord (live path, where
+    // readJsonlLines has already unwrapped {message: {role, content}}) and
+    // raw Claude Code JSONL lines (DB path, where body_json is the verbatim
+    // line). Flatten the wrapper shape inline so a single helper covers both.
+    let flat: JsonlRecord
+    const raw = rec as RawJsonlLine
+    if (raw.message?.role !== undefined) {
+      flat = { ...raw.message }
+      if (raw.isMeta) flat.isMeta = true
+      if (raw.uuid) flat.lineUuid = raw.uuid
+      if (raw.timestamp) flat.lineTs = raw.timestamp
+    } else if (raw.role !== undefined) {
+      flat = rec as JsonlRecord
+    } else {
+      continue
+    }
+    const newEntries = recordToEntries(flat, pendingToolUses, projectsRoot, cwdSlug, sessionId)
     entries.push(...newEntries)
   }
-
-  if (opts.envelopes && opts.sessionName) {
-    const name = opts.sessionName
-    for (const env of opts.envelopes) {
+  if (envelopes && sessionName) {
+    const name = sessionName
+    for (const env of envelopes) {
       if (env.from === 'dashboard' && (env.to === name || targetsName(env.to, name))) {
-        // Dashboard-authored messages render as the session's own "you:" turn
-        // to match the live render in appendEnvelopeToStream. The envelope id
-        // is the stable key that dedups against subsequent re-fetches.
         entries.push({
           uuid: env.id,
           ts: env.ts,
@@ -470,6 +481,28 @@ export function buildTranscript(opts: BuildTranscriptOptions): TranscriptEntry[]
     }
     entries.sort((a, b) => a.ts.localeCompare(b.ts))
   }
-
   return entries.slice(-limit)
+}
+
+/**
+ * Build a structured transcript from a Claude Code JSONL session file.
+ * If agentId is provided, reads the subagent transcript instead.
+ */
+export function buildTranscript(opts: BuildTranscriptOptions): TranscriptEntry[] {
+  const { projectsRoot, sessionId, agentId, limit } = opts
+  const cwdSlug = findCwdSlug(projectsRoot, sessionId)
+  if (cwdSlug === null) return []
+  const jsonlPath = agentId
+    ? join(projectsRoot, cwdSlug, sessionId, 'subagents', `agent-${agentId}.jsonl`)
+    : join(projectsRoot, cwdSlug, `${sessionId}.jsonl`)
+  const records = readJsonlLines(jsonlPath)
+  return recordsToTranscript(
+    records as unknown as Record<string, unknown>[],
+    projectsRoot,
+    cwdSlug,
+    sessionId,
+    opts.sessionName,
+    opts.envelopes,
+    limit,
+  )
 }

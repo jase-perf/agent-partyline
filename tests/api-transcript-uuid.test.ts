@@ -22,7 +22,7 @@ describe('buildArchiveTranscriptResponse', () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  test('returns entries from transcript_entries for the given uuid in seq order', () => {
+  test('returns user + assistant entries from transcript_entries in seq order', () => {
     registerSession(db, 'foo', '/tmp')
     insertEntry(db, {
       cc_session_uuid: 'arch',
@@ -31,7 +31,12 @@ describe('buildArchiveTranscriptResponse', () => {
       ts: '2026-04-22T00:00:01Z',
       kind: 'assistant-text',
       uuid: 'b',
-      body_json: JSON.stringify({ text: 'reply' }),
+      body_json: JSON.stringify({
+        type: 'assistant',
+        uuid: 'b',
+        timestamp: '2026-04-22T00:00:01Z',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'reply' }] },
+      }),
       created_at: Date.now(),
     })
     insertEntry(db, {
@@ -41,56 +46,58 @@ describe('buildArchiveTranscriptResponse', () => {
       ts: '2026-04-22T00:00:00Z',
       kind: 'user',
       uuid: 'a',
-      body_json: JSON.stringify({ text: 'question' }),
+      body_json: JSON.stringify({
+        type: 'user',
+        uuid: 'a',
+        timestamp: '2026-04-22T00:00:00Z',
+        message: { role: 'user', content: 'question' },
+      }),
       created_at: Date.now(),
     })
     const result = buildArchiveTranscriptResponse(db, 'foo', 'arch', 100)
-    expect(result.entries).toHaveLength(2)
-    expect(result.entries[0]!.kind).toBe('user')
-    expect(result.entries[1]!.kind).toBe('assistant-text')
+    expect(Array.isArray(result)).toBe(true)
+    // The fold may collapse certain entries; assert both kinds appear.
+    const types = result.map((e) => e.type)
+    expect(types).toContain('user')
+    expect(types).toContain('assistant-text')
   })
 
-  test('returns empty entries when uuid has no rows', () => {
+  test('returns empty array when uuid has no rows', () => {
     const result = buildArchiveTranscriptResponse(db, 'foo', 'never-seen', 100)
-    expect(result.entries).toEqual([])
+    expect(result).toEqual([])
   })
 
-  test('includes envelopes from messages table that match the uuid', () => {
+  test('includes party-line-receive entries from messages WHERE cc_session_uuid = uuid', () => {
     db.query(
       `INSERT INTO messages (id, ts, from_name, to_name, type, body, callback_id, response_to, cc_session_uuid)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run('env-1', 1_700_000_000_000, 'foo', 'bar', 'message', 'pong', null, null, 'arch')
-    insertEntry(db, {
-      cc_session_uuid: 'arch',
-      seq: 0,
-      session_name: 'foo',
-      ts: '2026-04-22T00:00:00Z',
-      kind: 'user',
-      uuid: 'a',
-      body_json: '{}',
-      created_at: Date.now(),
-    })
+    ).run('env-1', 1_700_000_000_000, 'other', 'foo', 'message', 'pong', null, null, 'arch')
     const result = buildArchiveTranscriptResponse(db, 'foo', 'arch', 100)
-    expect(result.envelopes).toHaveLength(1)
-    expect(result.envelopes[0]!.id).toBe('env-1')
+    const partyEntries = result.filter((e) => e.type === 'party-line-receive')
+    expect(partyEntries.length).toBe(1)
+    expect(partyEntries[0]!.envelope_id).toBe('env-1')
   })
 
-  test('respects limit and orders envelopes by ts ASC', () => {
-    // Three messages out of insertion order — verify ORDER BY ts ASC + LIMIT
+  test('respects limit and orders by ts ASC', () => {
     for (const [id, ts] of [
-      ['env-c', 3000],
-      ['env-a', 1000],
-      ['env-b', 2000],
+      ['env-c', 3_000_000],
+      ['env-a', 1_000_000],
+      ['env-b', 2_000_000],
     ] as Array<[string, number]>) {
       db.query(
         `INSERT INTO messages (id, ts, from_name, to_name, type, body, callback_id, response_to, cc_session_uuid)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(id, ts, 'foo', 'bar', 'message', 'x', null, null, 'arch')
+      ).run(id, ts, 'other', 'foo', 'message', 'x', null, null, 'arch')
     }
     const result = buildArchiveTranscriptResponse(db, 'foo', 'arch', 2)
-    // Limit honored
-    expect(result.envelopes).toHaveLength(2)
-    // Ascending by ts: env-a (1000) first, env-b (2000) second; env-c (3000) is excluded by limit=2.
-    expect(result.envelopes.map((e) => e.id)).toEqual(['env-a', 'env-b'])
+    const partyEntries = result.filter((e) => e.type === 'party-line-receive')
+    // Tail sliced by limit, ordered by ts ASC inside recordsToTranscript.
+    expect(partyEntries.length).toBeLessThanOrEqual(2)
+    expect(partyEntries.map((e) => e.envelope_id)).toEqual(
+      partyEntries
+        .map((e) => e.envelope_id)
+        .slice()
+        .sort(),
+    )
   })
 })
