@@ -2647,6 +2647,12 @@ section[data-view='switchboard'] .switchboard-wrap {
   gap: 12px;
   margin: 8px 0;
 }
+/* The `display: flex` rule above wins over the user-agent `[hidden]` rule, so
+   the banner stayed visible after returning to live. Restore the hidden
+   semantics with an explicitly-attribute-scoped override. */
+.archive-banner[hidden] {
+  display: none;
+}
 .archive-banner .archive-back {
   margin-left: auto;
   color: var(--accent);
