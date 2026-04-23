@@ -94,6 +94,7 @@ fetch('/api/self')
   .catch(() => {})
 let selectedSessionId = null
 let selectedAgentId = null
+var selectedArchiveUuid = null
 let currentSessionSubagents = []
 var historyBuffer = []
 
@@ -101,8 +102,18 @@ var historyBuffer = []
 
 function parseUrl() {
   const path = window.location.pathname
+  // /session/<name>/archive/<uuid>  (must come BEFORE the /agent/ branch)
+  let m = path.match(/^\/session\/([^/]+)\/archive\/([^/]+)\/?$/)
+  if (m) {
+    return {
+      view: 'session-detail',
+      sessionName: decodeURIComponent(m[1]),
+      agentId: null,
+      archiveUuid: decodeURIComponent(m[2]),
+    }
+  }
   // /session/<name>/agent/<id>
-  let m = path.match(/^\/session\/([^/]+)\/agent\/([^/]+)\/?$/)
+  m = path.match(/^\/session\/([^/]+)\/agent\/([^/]+)\/?$/)
   if (m) return { view: 'session-detail', sessionName: decodeURIComponent(m[1]), agentId: m[2] }
   // /session/<name>
   m = path.match(/^\/session\/([^/]+)\/?$/)
@@ -124,6 +135,8 @@ function urlForView(state) {
   }
   if (state.view === 'session-detail') {
     const enc = encodeURIComponent(state.sessionName || '')
+    if (state.archiveUuid)
+      return '/session/' + enc + '/archive/' + encodeURIComponent(state.archiveUuid)
     return state.agentId
       ? '/session/' + enc + '/agent/' + encodeURIComponent(state.agentId)
       : '/session/' + enc
@@ -151,6 +164,7 @@ function applyRoute(state, opts) {
       Array.isArray(lastSessions) && lastSessions.some((s) => s.name === state.sessionName)
     selectedSessionId = state.sessionName
     selectedAgentId = state.agentId || null
+    selectedArchiveUuid = state.archiveUuid || null
     notif.dispatchSessionViewed(state.sessionName)
     if (sessionDetailTab) {
       sessionDetailTab.disabled = false
@@ -292,6 +306,20 @@ function connect() {
       data = JSON.parse(e.data)
     } catch (err) {
       return
+    }
+
+    // While viewing an archive, drop live updates that target the same
+    // session — the archive is a frozen snapshot and shouldn't move.
+    var route = parseUrl()
+    if (route.view === 'session-detail' && route.archiveUuid) {
+      if (
+        (data.type === 'envelope' &&
+          (data.from === route.sessionName || data.to === route.sessionName)) ||
+        (data.type === 'session-delta' && data.session === route.sessionName) ||
+        (data.type === 'user-prompt' && data.data && data.data.session_name === route.sessionName)
+      ) {
+        return
+      }
     }
 
     if (data.type === 'sessions-snapshot') {
@@ -1839,6 +1867,8 @@ async function loadSessionDetailView() {
 
   document.getElementById('detail-name').textContent = sessionKey
   updateDetailBell(sessionKey)
+  // Reflect archive mode in the URL even before fetches complete.
+  setArchiveMode(sessionKey, selectedArchiveUuid)
 
   try {
     const r = await fetch('/api/session?id=' + encodeURIComponent(sessionKey))
@@ -1850,7 +1880,7 @@ async function loadSessionDetailView() {
     console.warn('session fetch failed', e)
   }
 
-  renderHistorySidebar(selectedSessionId, null)
+  renderHistorySidebar(selectedSessionId, selectedArchiveUuid)
 
   // selectedAgentId is set by the router before loadSessionDetailView is called;
   // do not reset it here so deep-linked agent views are honoured.
@@ -2063,12 +2093,15 @@ async function renderStream(opts) {
     return
   }
 
-  const streamKey = selectedSessionId + '|' + (selectedAgentId || '')
+  const streamKey =
+    selectedSessionId + '|' + (selectedAgentId || '') + '|' + (selectedArchiveUuid || '')
   const isNewStream = streamKey !== renderedStreamKey
   const force = opts && opts.force
   // Incremental mode: only fetch entries after the last rendered uuid.
-  // Disabled when: no prior uuid, new stream, or force refetch.
-  const incremental = opts && opts.incremental && !isNewStream && !force && lastRenderedUuid
+  // Disabled when: no prior uuid, new stream, force refetch, or viewing an
+  // archive (archives are immutable — always fetch the full transcript).
+  const incremental =
+    opts && opts.incremental && !isNewStream && !force && lastRenderedUuid && !selectedArchiveUuid
 
   if (isNewStream || force) {
     // Full rebuild path — show loading + replace everything.
@@ -2094,7 +2127,9 @@ async function renderStream(opts) {
     encodeURIComponent(selectedSessionId) +
     (selectedAgentId ? '&agent_id=' + encodeURIComponent(selectedAgentId) : '') +
     '&limit=300'
-  if (incremental && lastRenderedUuid) {
+  if (selectedArchiveUuid) {
+    qs += '&uuid=' + encodeURIComponent(selectedArchiveUuid)
+  } else if (incremental && lastRenderedUuid) {
     qs += '&after_uuid=' + encodeURIComponent(lastRenderedUuid)
   }
 
@@ -3393,4 +3428,35 @@ function attachHistoryTooltip(li, uuid) {
     if (tipEl && tipEl.parentNode) tipEl.parentNode.removeChild(tipEl)
     tipEl = null
   })
+}
+
+// --- Archive view mode: banner + read-only send bar -------------------------
+// Toggles the archive banner above the session header and disables the
+// send composer so the user can't try to message into a frozen archive.
+function setArchiveMode(sessionName, archiveUuid) {
+  var banner = document.getElementById('archive-banner')
+  var sendBar = document.querySelector('.detail-send')
+  if (archiveUuid) {
+    if (banner) banner.hidden = false
+    var txt = document.getElementById('archive-banner-text')
+    if (txt) txt.textContent = 'Viewing archive · uuid ' + archiveUuid.slice(0, 8) + '…'
+    var back = document.getElementById('archive-back-link')
+    if (back) {
+      back.onclick = function (ev) {
+        ev.preventDefault()
+        var liveState = {
+          view: 'session-detail',
+          sessionName: sessionName,
+          agentId: null,
+          archiveUuid: null,
+        }
+        pushRoute(liveState)
+        applyRoute(liveState, { skipPush: true })
+      }
+    }
+    if (sendBar) sendBar.classList.add('archive-readonly')
+  } else {
+    if (banner) banner.hidden = true
+    if (sendBar) sendBar.classList.remove('archive-readonly')
+  }
 }
