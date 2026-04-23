@@ -538,4 +538,42 @@ describe('switchboard', () => {
     expect(archives[0]!.reason).toBe('rotate_uuid_drift')
     cleanup()
   })
+
+  test('createSwitchboard accepts opts.onUuidAdopted and reconcile invokes it', () => {
+    registerSession(db, 'foo', '/tmp')
+    const calls: Array<{ name: string; uuid: string; reason: string }> = []
+    const sb = createSwitchboard(db, {
+      onUuidAdopted: (name, uuid, reason) => calls.push({ name, uuid, reason }),
+    })
+    sb.reconcileCcSessionUuid('foo', 'uuid-1', 'hook_drift')
+    expect(calls).toEqual([{ name: 'foo', uuid: 'uuid-1', reason: 'hook_drift' }])
+
+    // Same uuid again → no callback (no-op)
+    sb.reconcileCcSessionUuid('foo', 'uuid-1', 'hook_drift')
+    expect(calls.length).toBe(1)
+    cleanup()
+  })
+
+  test('reconcileCcSessionUuid attributes session_name for prior stranger entries', () => {
+    registerSession(db, 'foo', '/tmp')
+    // Simulate the ingester having captured stranger entries before adoption.
+    const { insertEntry } = require('../src/storage/transcript-entries')
+    insertEntry(db, {
+      cc_session_uuid: 'stranger-uuid',
+      seq: 0,
+      session_name: null,
+      ts: '2026-04-22T00:00:00Z',
+      kind: 'user',
+      uuid: 'e1',
+      body_json: '{}',
+      created_at: Date.now(),
+    })
+    const sb = createSwitchboard(db)
+    sb.reconcileCcSessionUuid('foo', 'stranger-uuid', 'hook_drift')
+    const row = db
+      .query(`SELECT session_name FROM transcript_entries WHERE cc_session_uuid = ?`)
+      .get('stranger-uuid') as { session_name: string }
+    expect(row.session_name).toBe('foo')
+    cleanup()
+  })
 })

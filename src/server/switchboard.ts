@@ -11,6 +11,7 @@ import {
   listSessions,
   type CcplSessionRow,
 } from '../storage/ccpl-queries'
+import { attributeSessionName } from '../storage/transcript-entries'
 
 type SessionWsData = { kind: 'session'; name?: string; token?: string }
 type ObserverWsData = { kind: 'observer' }
@@ -67,7 +68,12 @@ export interface Switchboard {
   isOnline(name: string): boolean
 }
 
-export function createSwitchboard(db: Database): Switchboard {
+export interface SwitchboardOpts {
+  /** Invoked after reconcileCcSessionUuid adopts a uuid. */
+  onUuidAdopted?: (name: string, uuid: string, reason: string) => void
+}
+
+export function createSwitchboard(db: Database, opts: SwitchboardOpts = {}): Switchboard {
   const sessionsByName = new Map<string, SessionSocket>()
   const observers = new Set<ObserverSocket>()
 
@@ -189,8 +195,13 @@ export function createSwitchboard(db: Database): Switchboard {
       archiveSession(db, name, row.cc_session_uuid, reason)
     }
     updateSessionOnConnect(db, name, newUuid, row.pid, row.machine_id)
+    // Backfill session_name for any stranger entries we'd ingested before
+    // knowing this uuid belonged to `name`.
+    attributeSessionName(db, newUuid, name)
     const fresh = getSessionByName(db, name)
     if (fresh) emitSessionDelta(fresh, { cc_session_uuid: fresh.cc_session_uuid })
+    // Notify callers (dashboard wires this to TranscriptIngester.backfillFromUuid).
+    opts.onUuidAdopted?.(name, newUuid, reason)
   }
 
   return {
