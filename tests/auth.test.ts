@@ -9,6 +9,8 @@ import {
   parseCookieHeader,
   pruneExpiredCookies,
   isAuthDisabled,
+  cookieHeaderForSet,
+  cookieHeaderForClear,
 } from '../src/server/auth'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -84,6 +86,38 @@ describe('auth', () => {
     expect(verifyCookie(db, null)).toBe(true)
     process.env.PARTY_LINE_DASHBOARD_PASSWORD = 'hunter2'
     cleanup()
+  })
+
+  test('cookieHeaderForSet uses SameSite=Lax (PWA launch must carry the cookie)', () => {
+    // SameSite=Strict drops the cookie on top-level navigations from outside
+    // the origin, which is how Android Chrome treats a PWA launch from the
+    // home screen — Strict would force a re-login on every PWA open. Lax
+    // sends the cookie on top-level navigations while still blocking
+    // cross-site POSTs and iframe loads. Do not change to Strict without
+    // re-validating the PWA install on Android.
+    const header = cookieHeaderForSet('payload.sig', true)
+    expect(header).toContain('SameSite=Lax')
+    expect(header).not.toContain('SameSite=Strict')
+    expect(header).toContain('HttpOnly')
+    expect(header).toContain('Secure')
+    expect(header).toContain('Path=/')
+    expect(header).toContain('Max-Age=')
+  })
+
+  test('cookieHeaderForSet omits Secure when secure=false (HTTP dev)', () => {
+    const header = cookieHeaderForSet('payload.sig', false)
+    expect(header).not.toContain('Secure')
+    expect(header).toContain('SameSite=Lax')
+  })
+
+  test('cookieHeaderForClear matches Set attributes for proper clearing', () => {
+    // Clearing a cookie requires the same Path + SameSite attributes as the
+    // Set call; otherwise the browser treats it as a new cookie and leaves
+    // the original in place.
+    const header = cookieHeaderForClear(true)
+    expect(header).toContain('SameSite=Lax')
+    expect(header).toContain('Path=/')
+    expect(header).toContain('Max-Age=0')
   })
 
   test('pruneExpiredCookies removes only expired rows', () => {

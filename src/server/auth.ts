@@ -84,15 +84,20 @@ export function parseCookieHeader(header: string | null): string | null {
   return null
 }
 
+// SameSite=Lax (not Strict). When an installed PWA is launched from the
+// home screen on Android, Chrome treats the navigation as cross-site for
+// the first request, which would drop a Strict cookie and force a re-login
+// every launch. Lax sends the cookie on top-level navigations (PWA launch
+// included) while still blocking cross-site POSTs and iframe loads.
 export function cookieHeaderForSet(cookie: string, secure: boolean): string {
   const maxAge = Math.floor(COOKIE_TTL_MS / 1000)
   const secureAttr = secure ? '; Secure' : ''
-  return `${COOKIE_NAME}=${cookie}; HttpOnly${secureAttr}; SameSite=Strict; Path=/; Max-Age=${maxAge}`
+  return `${COOKIE_NAME}=${cookie}; HttpOnly${secureAttr}; SameSite=Lax; Path=/; Max-Age=${maxAge}`
 }
 
 export function cookieHeaderForClear(secure: boolean): string {
   const secureAttr = secure ? '; Secure' : ''
-  return `${COOKIE_NAME}=; HttpOnly${secureAttr}; SameSite=Strict; Path=/; Max-Age=0`
+  return `${COOKIE_NAME}=; HttpOnly${secureAttr}; SameSite=Lax; Path=/; Max-Age=0`
 }
 
 export function pruneExpiredCookies(db: Database): void {
