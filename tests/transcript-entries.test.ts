@@ -89,6 +89,27 @@ describe('transcript-entries queries', () => {
     expect(lastAssistantText(db, 'u1')).toBeNull()
   })
 
+  test('lastAssistantText extracts text from real Claude Code shape (message.content[].text)', () => {
+    // The real JSONL shape — message.content is an array of content blocks;
+    // each text block has its own `text` field. tool_use blocks must be
+    // skipped; multi-block assistant turns join with two newlines.
+    const realShape = {
+      type: 'assistant',
+      uuid: 'x',
+      timestamp: '2026-04-22T00:00:00Z',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'first block' },
+          { type: 'tool_use', id: 't1', name: 'Bash', input: {} },
+          { type: 'text', text: 'second block' },
+        ],
+      },
+    }
+    insertEntry(db, mk('u1', 0, 'assistant-text', realShape))
+    expect(lastAssistantText(db, 'u1')).toBe('first block\n\nsecond block')
+  })
+
   test('archiveLabel returns last-assistant-text truncated to maxLen', () => {
     insertEntry(db, mk('u1', 0, 'assistant-text', { text: 'a'.repeat(80) }))
     expect(archiveLabel(db, 'u1', 32)?.length).toBe(32)

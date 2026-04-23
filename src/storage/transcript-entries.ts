@@ -68,7 +68,16 @@ export function deleteEntriesForUuid(db: Database, uuid: string): void {
   db.query(`DELETE FROM transcript_entries WHERE cc_session_uuid = ?`).run(uuid)
 }
 
-/** Last assistant-text entry's `text` field, or null if none. */
+/**
+ * Last assistant-text entry's text content, or null if none.
+ *
+ * Real Claude Code JSONL stores assistant turns as
+ * `{ type: 'assistant', message: { content: [{ type: 'text', text: '...' }, ...] } }`,
+ * but tests + older callers may pass a flat `{ text: '...' }`. Try both shapes
+ * (real first, then flat) and concatenate all text blocks of the real shape so
+ * a multi-block assistant turn yields a complete label, not just the first
+ * block.
+ */
 export function lastAssistantText(db: Database, uuid: string): string | null {
   const row = db
     .query(
@@ -79,8 +88,29 @@ export function lastAssistantText(db: Database, uuid: string): string | null {
     .get(uuid) as { body_json: string } | null
   if (!row) return null
   try {
-    const parsed = JSON.parse(row.body_json) as { text?: unknown }
-    return typeof parsed.text === 'string' ? parsed.text : null
+    const parsed = JSON.parse(row.body_json) as {
+      text?: unknown
+      message?: { content?: unknown }
+    }
+    // Real Claude Code shape: message.content is an array of content blocks.
+    const content = parsed.message?.content
+    if (Array.isArray(content)) {
+      const texts: string[] = []
+      for (const block of content) {
+        if (
+          block &&
+          typeof block === 'object' &&
+          (block as { type?: unknown }).type === 'text' &&
+          typeof (block as { text?: unknown }).text === 'string'
+        ) {
+          texts.push((block as { text: string }).text)
+        }
+      }
+      if (texts.length > 0) return texts.join('\n\n')
+    }
+    // Legacy / test shape: flat `{ text: '...' }`.
+    if (typeof parsed.text === 'string') return parsed.text
+    return null
   } catch {
     return null
   }
