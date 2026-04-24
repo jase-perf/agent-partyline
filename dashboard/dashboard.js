@@ -2312,7 +2312,8 @@ function renderToolGroup(entries) {
   const wrap = document.createElement('div')
   wrap.className = 'tool-group'
   const details = document.createElement('details')
-  if (entries.length < 3) details.open = true
+  // Always closed by default — even pairs add visual noise when expanded
+  // through long sessions. User can click to open.
   const summary = document.createElement('summary')
   updateToolGroupSummary(summary, entries.length, entries)
   details.appendChild(summary)
@@ -2380,7 +2381,7 @@ function appendEntryWithGrouping(root, e) {
     const group = document.createElement('div')
     group.className = 'tool-group'
     const details = document.createElement('details')
-    if (prevEntries.length < 3) details.open = true
+    // Always closed by default — see renderToolGroup.
     const summary = document.createElement('summary')
     updateToolGroupSummary(summary, prevEntries.length, prevEntries)
     details.appendChild(summary)

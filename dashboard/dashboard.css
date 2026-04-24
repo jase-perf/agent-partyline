@@ -1639,6 +1639,42 @@ section[data-view='session-detail'] .detail-send {
   letter-spacing: 0.5px;
   margin-bottom: 4px;
 }
+/* Distinguish user vs assistant turns with a colored pill on the label and
+ * a subtle border-tinted card around the entry. Tool calls + spawn markers
+ * intentionally stay neutral so the eye lands on the conversation, not the
+ * machinery. */
+.entry-user,
+.entry-assistant-text {
+  border-left: 3px solid transparent;
+  padding-left: 8px;
+  border-radius: 2px;
+}
+.entry-user {
+  border-left-color: var(--accent);
+  background: rgba(88, 166, 255, 0.06);
+}
+.entry-assistant-text {
+  border-left-color: var(--purple);
+  background: rgba(188, 140, 255, 0.06);
+}
+.entry-user > .entry-label {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #0d1117;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.entry-assistant-text > .entry-label {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--purple);
+  color: #0d1117;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
 .entry-body {
   color: var(--text);
 }
