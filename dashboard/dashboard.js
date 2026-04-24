@@ -172,42 +172,19 @@ function applyRoute(state, opts) {
     document.querySelectorAll('.tabs button').forEach((b) => b.classList.remove('active'))
     if (sessionDetailTab) sessionDetailTab.classList.add('active')
     renderView('session-detail')
-    if (!known) {
-      if (!sessionsReady) {
-        // Defer the "unknown session" UI until we've heard from the server at least once.
-        pendingRouteState = state
-        const stream = document.getElementById('detail-stream')
-        if (stream) {
-          stream.replaceChildren()
-          const p = document.createElement('p')
-          p.style.color = 'var(--text-dim)'
-          p.textContent = 'Loading session…'
-          stream.appendChild(p)
-        }
-        return
-      }
-      // Sessions are loaded and this name is genuinely unknown — render the fallback.
-      setTimeout(() => {
-        const stream = document.getElementById('detail-stream')
-        if (!stream) return
-        stream.replaceChildren()
-        const p = document.createElement('p')
-        p.style.color = 'var(--text-dim)'
-        p.textContent =
-          'Session "' +
-          state.sessionName +
-          '" is not currently known to the dashboard. It may have ended or the name may have changed. '
-        const back = document.createElement('a')
-        back.href = '/'
-        back.textContent = 'Back to Switchboard'
-        back.addEventListener('click', (e) => {
-          e.preventDefault()
-          navigate({ view: 'switchboard' })
-        })
-        p.appendChild(back)
-        stream.appendChild(p)
-      }, 100)
+    if (!known && !sessionsReady) {
+      // Sessions list hasn't arrived yet — wait for /ws/observer's first
+      // sessions-snapshot before deciding the session is missing. Stash the
+      // route so we re-fire applyRoute once sessionsReady flips true.
+      pendingRouteState = state
+      return
     }
+    // Note: when !known && sessionsReady, we still call renderView →
+    // loadSessionDetailView. /api/session returns {session: null, ...} for
+    // unknown names, so the loader keeps spinning briefly and then settles
+    // on whatever the server has (often the session HAS come online by then).
+    // Showing a hard "session not found" message via setTimeout race against
+    // the in-flight fetch caused mid-load flicker on slow connections.
   } else if (state.view === 'history') {
     document.querySelectorAll('.tabs button').forEach((b) => b.classList.remove('active'))
     const histTab = document.querySelector('button[data-view="history"]')
@@ -1870,9 +1847,18 @@ async function loadSessionDetailView() {
   // Reflect archive mode in the URL even before fetches complete.
   setArchiveMode(sessionKey, selectedArchiveUuid)
 
+  // Wipe the previous session's content synchronously, before any awaits.
+  // On slow networks the /api/session and /api/transcript fetches can take
+  // several seconds; without an upfront reset the user sees the previous
+  // session's transcript and sidebar agents under the new session's header.
+  resetDetailViewForSwitch()
+
   try {
     const r = await fetch('/api/session?id=' + encodeURIComponent(sessionKey))
     const data = await r.json()
+    // The user may have navigated to a different session by the time this
+    // resolves — drop the response if the selection has moved on.
+    if (selectedSessionId !== sessionKey) return
     currentSessionSubagents = data.subagents || []
     if (data.session) renderDetailHeader(data.session)
     renderAgentTree()
@@ -1880,11 +1866,62 @@ async function loadSessionDetailView() {
     console.warn('session fetch failed', e)
   }
 
+  if (selectedSessionId !== sessionKey) return
   renderHistorySidebar(selectedSessionId, selectedArchiveUuid)
 
   // selectedAgentId is set by the router before loadSessionDetailView is called;
   // do not reset it here so deep-linked agent views are honoured.
   await renderStream()
+}
+
+/**
+ * Synchronously wipe the session-detail view's stale content + show the
+ * loading state. Called at the start of loadSessionDetailView so the user
+ * never sees the prior session's transcript / sidebar / header data while
+ * the new session's fetches are in flight.
+ */
+function resetDetailViewForSwitch() {
+  const stream = document.getElementById('detail-stream')
+  if (stream) {
+    stream.replaceChildren()
+    const loading = document.createElement('p')
+    loading.style.color = 'var(--text-dim)'
+    loading.textContent = 'Loading…'
+    stream.appendChild(loading)
+  }
+  // Reset renderStream's dedup cursor so its incremental path doesn't
+  // believe the new session's first entries are duplicates.
+  renderedEntryKeys = new Set()
+  renderedStreamKey = null
+  lastRenderedUuid = null
+
+  // Sidebar agent tree — currentSessionSubagents holds the prior session's
+  // rows until /api/session resolves.
+  currentSessionSubagents = []
+  renderAgentTree()
+
+  // Sidebar history rows — renderHistorySidebar will repopulate them once
+  // /api/archives resolves.
+  const hist = document.getElementById('detail-history')
+  if (hist) hist.replaceChildren()
+
+  // Header data fields except the name (set by the caller above).
+  const stateEl = document.getElementById('detail-state')
+  if (stateEl) {
+    stateEl.textContent = ''
+    stateEl.className = 'state-pill'
+  }
+  for (const id of [
+    'detail-cwd',
+    'detail-model',
+    'detail-host',
+    'detail-subagents',
+    'detail-last',
+    'detail-ctx',
+  ]) {
+    const el = document.getElementById(id)
+    if (el) el.textContent = ''
+  }
 }
 
 function renderDetailHeader(session) {
