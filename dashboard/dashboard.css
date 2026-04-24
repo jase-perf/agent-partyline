@@ -57,9 +57,14 @@ body {
   font-size: 13px;
   background: var(--bg);
   color: var(--text);
-  /* Dynamic viewport height: tracks mobile browser chrome showing/hiding. */
+  /* Dynamic viewport height: tracks mobile browser chrome showing/hiding.
+   * The --vv-height var (set by the visualViewport listener in dashboard.js)
+   * tracks iOS/iPadOS soft-keyboard show/hide so the layout compresses to
+   * fit instead of getting scrolled off-screen. Falls back to 100dvh on
+   * browsers without visualViewport. */
   height: 100vh;
   height: 100dvh;
+  height: var(--vv-height, 100dvh);
   display: flex;
   flex-direction: column;
   overflow: hidden;

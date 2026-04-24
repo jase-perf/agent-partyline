@@ -34,6 +34,43 @@ if ('serviceWorker' in navigator) {
       return null
     })
 }
+// --- Mobile soft-keyboard handling ---------------------------------------
+// On iOS/iPadOS the on-screen keyboard scrolls the entire layout viewport
+// upward to make the focused input visible. With a fixed-shell layout
+// (overflow:hidden body), this leaves blank space at top + content cut off.
+// Track the visible height via visualViewport, expose it as --vv-height
+// (consumed by dashboard.css), and force-scroll the layout viewport back
+// to (0,0) whenever iOS lets it drift. Browsers without visualViewport
+// just keep the 100dvh fallback in CSS.
+function applyVisualViewportHeight() {
+  const vv = window.visualViewport
+  if (!vv) return
+  document.documentElement.style.setProperty('--vv-height', vv.height + 'px')
+  if (window.scrollY !== 0 || window.scrollX !== 0) {
+    window.scrollTo(0, 0)
+  }
+}
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', applyVisualViewportHeight)
+  window.visualViewport.addEventListener('scroll', applyVisualViewportHeight)
+  applyVisualViewportHeight()
+}
+
+// When the composer takes focus, ensure the latest transcript entry stays
+// visible above the (now-rising) keyboard. Two RAFs to wait until both the
+// keyboard animation and the visualViewport listener above have settled.
+document.addEventListener('focusin', (e) => {
+  const target = e.target
+  if (!target || typeof target.closest !== 'function') return
+  if (!target.closest('.detail-send')) return
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      const stream = document.getElementById('detail-stream')
+      if (stream) stream.scrollTop = stream.scrollHeight
+    })
+  })
+})
+
 let sessionSources = {} // session name -> source string, populated from session-update events
 let currentView = 'switchboard'
 let localMachineId = null
