@@ -668,4 +668,103 @@ describe('buildTranscript', () => {
     const userEntries = entries.filter((e) => e.type === 'user')
     expect(userEntries.length).toBe(0)
   })
+
+  test('filters synthetic <task-notification>, <command-name>, <local-command-stdout> content', () => {
+    // Claude Code injects these as user-role messages but they are internal
+    // markers (background subagent completion, slash-command invocations,
+    // local-command stdout/stderr). They have no isMeta flag, so we must
+    // detect them by their tag prefix in the content string.
+    const cwdDir = join(projectsRoot, '-home-x')
+    mkdirSync(cwdDir, { recursive: true })
+
+    const lines = [
+      {
+        type: 'user',
+        message: { role: 'user', content: 'real prompt' },
+        uuid: 'r1',
+        timestamp: '2026-04-20T00:00:01Z',
+      },
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: '<task-notification>\n<task-id>abc</task-id>\n</task-notification>',
+        },
+        uuid: 's1',
+        timestamp: '2026-04-20T00:00:02Z',
+      },
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content:
+            '<command-name>/compact</command-name>\n            <command-message>compact</command-message>',
+        },
+        uuid: 's2',
+        timestamp: '2026-04-20T00:00:03Z',
+      },
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: '<local-command-stdout>Compacted</local-command-stdout>',
+        },
+        uuid: 's3',
+        timestamp: '2026-04-20T00:00:04Z',
+      },
+      {
+        type: 'user',
+        message: { role: 'user', content: '<local-command-stderr>oops</local-command-stderr>' },
+        uuid: 's4',
+        timestamp: '2026-04-20T00:00:05Z',
+      },
+    ]
+    writeFileSync(
+      join(cwdDir, 'sess-syn.jsonl'),
+      lines.map((r) => JSON.stringify(r)).join('\n') + '\n',
+    )
+
+    const entries = buildTranscript({ projectsRoot, sessionId: 'sess-syn', limit: 100 })
+    const userEntries = entries.filter((e) => e.type === 'user')
+    expect(userEntries.length).toBe(1)
+    expect(userEntries[0]!.text).toBe('real prompt')
+  })
+
+  test('filters JSONL lines with isCompactSummary or isVisibleInTranscriptOnly', () => {
+    // Claude Code's compaction emits a giant user-role summary marked with
+    // both flags. It is the auto-summary, not the user's text — must be
+    // dropped from the rendered transcript.
+    const cwdDir = join(projectsRoot, '-home-x')
+    mkdirSync(cwdDir, { recursive: true })
+
+    const lines = [
+      {
+        type: 'user',
+        message: { role: 'user', content: 'real prompt' },
+        uuid: 'r1',
+        timestamp: '2026-04-20T00:00:01Z',
+      },
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content:
+            'This session is being continued from a previous conversation that ran out of context. Summary: ...',
+        },
+        isCompactSummary: true,
+        isVisibleInTranscriptOnly: true,
+        uuid: 'cs1',
+        timestamp: '2026-04-20T00:00:02Z',
+      },
+    ]
+    writeFileSync(
+      join(cwdDir, 'sess-cs.jsonl'),
+      lines.map((r) => JSON.stringify(r)).join('\n') + '\n',
+    )
+
+    const entries = buildTranscript({ projectsRoot, sessionId: 'sess-cs', limit: 100 })
+    const userEntries = entries.filter((e) => e.type === 'user')
+    expect(userEntries.length).toBe(1)
+    expect(userEntries[0]!.text).toBe('real prompt')
+  })
 })

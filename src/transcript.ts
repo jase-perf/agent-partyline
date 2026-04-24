@@ -102,6 +102,14 @@ interface JsonlRecord {
    */
   isMeta?: boolean
   /**
+   * Claude Code sets these on the auto-generated post-compaction summary
+   * record. Hoisted from the top-level JSONL line so recordToEntries can
+   * drop the giant "This session is being continued from a previous
+   * conversation..." block, which is internal context, not user prose.
+   */
+  isCompactSummary?: boolean
+  isVisibleInTranscriptOnly?: boolean
+  /**
    * Stable identifier from the JSONL line (`line.uuid`). Hoisted here so that
    * recordToEntries can emit deterministic TranscriptEntry uuids — required
    * for the dashboard's incremental after_uuid fetch + renderedEntryKeys
@@ -120,6 +128,9 @@ interface RawJsonlLine {
   message?: JsonlRecord
   /** Top-level synthetic marker — see JsonlRecord.isMeta. */
   isMeta?: boolean
+  /** Top-level flags — see JsonlRecord.isCompactSummary. */
+  isCompactSummary?: boolean
+  isVisibleInTranscriptOnly?: boolean
   /** Stable per-line identifier written by Claude Code. */
   uuid?: string
   /** ISO timestamp written by Claude Code for this JSONL line. */
@@ -164,6 +175,33 @@ function isPartyLineChannelString(text: string): boolean {
   if (typeof text !== 'string') return false
   const trimmed = text.trim()
   return /^<channel\s+[^>]*\bsource="party-line"[^>]*>[\s\S]*<\/channel>$/.test(trimmed)
+}
+
+/**
+ * True when the user-role string is one of Claude Code's internal markers:
+ *   - <task-notification>    background subagent completion ping
+ *   - <command-name>         /slash command name (paired with -message/-args)
+ *   - <command-message>      /slash command message
+ *   - <local-command-stdout> output of a /slash command
+ *   - <local-command-stderr> stderr of a /slash command
+ *   - <local-command-caveat> caveat appended after a local command
+ * These have no isMeta flag, so detection by tag prefix is the only signal.
+ */
+const SYNTHETIC_USER_TAGS = [
+  'task-notification',
+  'command-name',
+  'command-message',
+  'local-command-stdout',
+  'local-command-stderr',
+  'local-command-caveat',
+]
+function isSyntheticUserContent(text: string): boolean {
+  if (typeof text !== 'string') return false
+  const trimmed = text.trimStart()
+  for (const tag of SYNTHETIC_USER_TAGS) {
+    if (trimmed.startsWith(`<${tag}>`) || trimmed.startsWith(`<${tag} `)) return true
+  }
+  return false
 }
 
 /**
@@ -219,6 +257,8 @@ function readJsonlLines(path: string): JsonlRecord[] {
       if (parsed.message?.role !== undefined) {
         const rec: JsonlRecord = { ...parsed.message }
         if (parsed.isMeta) rec.isMeta = true
+        if (parsed.isCompactSummary) rec.isCompactSummary = true
+        if (parsed.isVisibleInTranscriptOnly) rec.isVisibleInTranscriptOnly = true
         if (parsed.uuid) rec.lineUuid = parsed.uuid
         if (parsed.timestamp) rec.lineTs = parsed.timestamp
         records.push(rec)
@@ -321,12 +361,15 @@ function recordToEntries(
     // these with isMeta:true at the top level of the JSONL line; they should
     // never appear as user-typed text in the dashboard transcript.
     if (rec.isMeta) return entries
+    // Compaction-emitted summary block — internal context, not user prose.
+    if (rec.isCompactSummary || rec.isVisibleInTranscriptOnly) return entries
 
     if (typeof rec.content === 'string') {
       // Even without isMeta, a bare <system-reminder>… string is never real
       // user input — skip it as a safety net for older or hook-injected lines.
       if (isSystemReminderString(rec.content)) return entries
       if (isPartyLineChannelString(rec.content)) return entries
+      if (isSyntheticUserContent(rec.content)) return entries
       entries.push({ uuid: lineUuid, ts, type: 'user', text: rec.content })
     } else if (Array.isArray(rec.content)) {
       let blockIdx = 0
@@ -352,6 +395,10 @@ function recordToEntries(
             continue
           }
           if (isPartyLineChannelString(blk.text)) {
+            blockIdx++
+            continue
+          }
+          if (isSyntheticUserContent(blk.text)) {
             blockIdx++
             continue
           }
@@ -426,6 +473,8 @@ export function recordsToTranscript(
     if (raw.message?.role !== undefined) {
       flat = { ...raw.message }
       if (raw.isMeta) flat.isMeta = true
+      if (raw.isCompactSummary) flat.isCompactSummary = true
+      if (raw.isVisibleInTranscriptOnly) flat.isVisibleInTranscriptOnly = true
       if (raw.uuid) flat.lineUuid = raw.uuid
       if (raw.timestamp) flat.lineTs = raw.timestamp
     } else if (raw.role !== undefined) {
