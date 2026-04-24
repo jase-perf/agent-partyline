@@ -1703,6 +1703,47 @@ section[data-view='session-detail'] .detail-send {
 .code-block:hover .code-copy-btn {
   opacity: 1;
 }
+/* Sequential tool-call grouping. Mirrors `.agent-group` so the visual idiom
+   for "collapsed cluster of stuff" stays consistent across the dashboard. */
+.tool-group {
+  margin: 6px 0;
+}
+.tool-group > details > summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  padding: 4px 8px;
+  list-style: none;
+  border-left: 3px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+}
+.tool-group > details > summary::-webkit-details-marker {
+  display: none;
+}
+.tool-group > details > summary strong {
+  color: var(--text);
+  font-weight: 600;
+  margin-right: 2px;
+}
+.tool-group > details[open] > summary {
+  color: var(--text);
+  border-left-color: var(--cyan);
+}
+.tool-group > details > summary:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.tool-group-body {
+  padding-left: 8px;
+  border-left: 1px dashed var(--border);
+  margin-left: 4px;
+}
+/* Slightly tighten the inner tool-use entries when grouped so the indent reads
+   as a hierarchy rather than two parallel rails. */
+.tool-group-body > .entry.entry-tool-use > .tool-use {
+  margin: 3px 0;
+}
+
 .tool-use {
   margin: 6px 0;
   background: #0d1117;

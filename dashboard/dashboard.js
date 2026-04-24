@@ -1,4 +1,10 @@
 import { createNotifications } from './notifications.js'
+import {
+  groupSequentialToolCalls,
+  summarizeToolGroup,
+  shouldExtendToolRun,
+  TOOL_GROUP_MIN_RUN,
+} from './transcript-grouping.js'
 
 const busFeed = document.getElementById('busFeed')
 const connStatus = document.getElementById('connStatus')
@@ -1566,7 +1572,7 @@ function handleUserPromptLive(data) {
   }
   renderedEntryKeys.add(entry.uuid)
   const wasNearBottom = isNearBottom(root)
-  root.appendChild(renderEntry(entry))
+  appendEntryWithGrouping(root, entry)
   if (wasNearBottom) root.scrollTop = root.scrollHeight
 }
 
@@ -1678,7 +1684,7 @@ function appendEnvelopeToStream(envelope) {
   }
   const wasNear = isNearBottom(root)
   renderedEntryKeys.add(key)
-  root.appendChild(renderEntry(entry))
+  appendEntryWithGrouping(root, entry)
   if (wasNear) {
     root.scrollTop = root.scrollHeight
     missedWhileScrolledUp = 0
@@ -2214,7 +2220,16 @@ async function renderStream(opts) {
   // For user entries, also key by text so a live-injected "pending" entry
   // (from UserPromptSubmit hook) dedupes against the canonical JSONL entry
   // once the transcript refetch picks it up.
+  //
+  // Tool-call grouping: on a full rebuild, we group the entire entry list up
+  // front via groupSequentialToolCalls (pure, tested). On an incremental
+  // append, we use appendEntryWithGrouping per entry, which inspects the DOM
+  // tail to extend the in-progress run — that way a streaming series of
+  // tool-use entries folds into the same `.tool-group` as it grows.
   let appendedCount = 0
+  const isFullRebuildPath = isNewStream || force
+  /** @type {typeof entries} */
+  const newEntries = []
   for (const e of entries) {
     const key = e.uuid || e.ts + '|' + e.type + '|' + (e.envelope_id || '')
     const textKey = e.type === 'user' && e.text ? 'user-text:' + e.text : null
@@ -2222,10 +2237,16 @@ async function renderStream(opts) {
     if (textKey && renderedEntryKeys.has(textKey)) continue
     renderedEntryKeys.add(key)
     if (textKey) renderedEntryKeys.add(textKey)
-    root.appendChild(renderEntry(e))
+    newEntries.push(e)
     appendedCount++
-    // Update the incremental cursor to the newest entry's uuid.
     if (e.uuid) lastRenderedUuid = e.uuid
+  }
+  if (newEntries.length > 0) {
+    if (isFullRebuildPath) {
+      renderGroupedItems(root, groupSequentialToolCalls(newEntries))
+    } else {
+      for (const e of newEntries) appendEntryWithGrouping(root, e)
+    }
   }
 
   // Scroll to bottom only if it's a fresh stream OR the user was already near
@@ -2272,6 +2293,164 @@ function renderEntry(e) {
 
   return wrap
 }
+
+// --- Sequential tool-call grouping ---
+//
+// Default-state policy (matches spec):
+//   - run length 1 → no wrapper at all (handled by groupSequentialToolCalls)
+//   - run length 2 → wrapped, but expanded by default (low value to hide just two)
+//   - run length ≥ 3 → wrapped and collapsed by default
+// The threshold is intentionally conservative so the user's eye still lands on
+// the assistant's prose and prompts, not on a wall of Bash/Read/Edit summaries.
+
+/**
+ * Build a `<div class="tool-group">` containing a `<details>` whose body holds
+ * the individual tool-use entries (rendered via the existing renderEntry path,
+ * so nothing about per-call rendering changes).
+ */
+function renderToolGroup(entries) {
+  const wrap = document.createElement('div')
+  wrap.className = 'tool-group'
+  const details = document.createElement('details')
+  if (entries.length < 3) details.open = true
+  const summary = document.createElement('summary')
+  updateToolGroupSummary(summary, entries.length, entries)
+  details.appendChild(summary)
+  const body = document.createElement('div')
+  body.className = 'tool-group-body'
+  for (const e of entries) {
+    body.appendChild(renderEntry(e))
+  }
+  details.appendChild(body)
+  wrap.appendChild(details)
+  return wrap
+}
+
+/** Set the summary's text content to reflect the current tool-call count + names. */
+function updateToolGroupSummary(summary, count, entries) {
+  summary.replaceChildren()
+  const arrow = document.createTextNode('▸ ')
+  const countSpan = document.createElement('strong')
+  countSpan.textContent = count + ' tool call' + (count === 1 ? '' : 's')
+  const detail = document.createTextNode(' (' + summarizeToolGroup(entries) + ')')
+  summary.appendChild(arrow)
+  summary.appendChild(countSpan)
+  summary.appendChild(detail)
+}
+
+/**
+ * Append one transcript entry to `root`, folding sequential tool-use entries
+ * into a `.tool-group` wrapper. Derives the current run state from the DOM tail
+ * so it works identically for full-rebuild and incremental-append paths, and
+ * for live-injection paths (handleUserPromptLive / appendEnvelopeToStream).
+ */
+function appendEntryWithGrouping(root, e) {
+  if (e.type !== 'tool-use') {
+    root.appendChild(renderEntry(e))
+    return
+  }
+  const tail = root.lastElementChild
+  // Case 1: tail is an existing tool-group → extend it.
+  if (tail && tail.classList && tail.classList.contains('tool-group')) {
+    const body = tail.querySelector('.tool-group-body')
+    const summary = tail.querySelector('summary')
+    if (body && summary) {
+      body.appendChild(renderEntry(e))
+      // Recompute summary from the live DOM so it stays accurate as the run grows.
+      const liveEntries = collectToolGroupEntries(body)
+      updateToolGroupSummary(summary, liveEntries.length, liveEntries)
+      return
+    }
+  }
+  // Case 2: tail is a single tool-use entry → promote it + this one into a group.
+  if (
+    tail &&
+    tail.classList &&
+    tail.classList.contains('entry-tool-use') &&
+    tail.dataset &&
+    tail.dataset.toolEntry
+  ) {
+    // We need the original entry data to rebuild renderEntry-style children;
+    // simplest correct move: lift the existing DOM into the group body verbatim,
+    // then append the new entry via renderEntry. Tracked entries (via
+    // dataset.toolEntry) carry enough metadata for summary generation.
+    const prevEntries = [JSON.parse(tail.dataset.toolEntry)]
+    prevEntries.push(_serializeToolEntry(e))
+
+    const group = document.createElement('div')
+    group.className = 'tool-group'
+    const details = document.createElement('details')
+    if (prevEntries.length < 3) details.open = true
+    const summary = document.createElement('summary')
+    updateToolGroupSummary(summary, prevEntries.length, prevEntries)
+    details.appendChild(summary)
+    const body = document.createElement('div')
+    body.className = 'tool-group-body'
+
+    // Move the existing tool-use DOM into the body (preserves any open state).
+    root.replaceChild(group, tail)
+    body.appendChild(tail)
+    body.appendChild(renderEntry(e))
+    details.appendChild(body)
+    group.appendChild(details)
+    return
+  }
+  // Case 3: no run in progress → append as a singleton tool entry.
+  // Tag with dataset.toolEntry so a future tool-use can promote it into a group.
+  const wrap = renderEntry(e)
+  wrap.dataset.toolEntry = JSON.stringify(_serializeToolEntry(e))
+  root.appendChild(wrap)
+}
+
+/** Minimal serialization of a tool-use entry for summary regeneration. */
+function _serializeToolEntry(e) {
+  return { type: 'tool-use', tool_name: e.tool_name || '' }
+}
+
+/** Walk a tool-group body and pull the tool_name from each child for summary text. */
+function collectToolGroupEntries(body) {
+  const out = []
+  for (const child of body.children) {
+    if (child.dataset && child.dataset.toolEntry) {
+      try {
+        out.push(JSON.parse(child.dataset.toolEntry))
+        continue
+      } catch {
+        /* fall through */
+      }
+    }
+    // Fallback: pull the tool name from the inline <code> in the summary.
+    const code = child.querySelector('details > summary code')
+    out.push({ type: 'tool-use', tool_name: code ? code.textContent || '' : '' })
+  }
+  return out
+}
+
+/**
+ * Render a list of grouped items (from `groupSequentialToolCalls`) under `root`.
+ * Used by the full-rebuild path in renderStream.
+ */
+function renderGroupedItems(root, items) {
+  for (const item of items) {
+    if (item.kind === 'tool-group') {
+      root.appendChild(renderToolGroup(item.entries))
+    } else {
+      const wrap = renderEntry(item.entry)
+      // Tag tool-use singletons so a future incremental append can promote
+      // them into a group if another tool-use lands next.
+      if (item.entry.type === 'tool-use') {
+        wrap.dataset.toolEntry = JSON.stringify(_serializeToolEntry(item.entry))
+      }
+      root.appendChild(wrap)
+    }
+  }
+}
+
+// Re-export sanity: shouldExtendToolRun + TOOL_GROUP_MIN_RUN are documented
+// in the helper module and exercised by tests; the runtime path here uses
+// groupSequentialToolCalls (full rebuild) and DOM-tail inspection (incremental).
+void TOOL_GROUP_MIN_RUN
+void shouldExtendToolRun
 
 function appendLabel(wrap, text) {
   const lab = document.createElement('div')
