@@ -1659,9 +1659,14 @@ function handleUserPromptLive(data, rootOverride) {
     const root = rootOverride || scopedById(tab.contentEl, 'detail-stream')
     if (!(root instanceof HTMLElement)) continue
     appendEntryWithGrouping(root, entry)
-    // Scroll only if this is the tab the user is currently looking at.
-    if (tab.name === focusedTabName) {
-      if (isNearBottom(root)) root.scrollTop = root.scrollHeight
+    if (tab.name !== focusedTabName) {
+      // Background tabs follow the tail unconditionally.
+      root.scrollTop = root.scrollHeight
+    } else if (isNearBottom(root)) {
+      // Focused tab: only auto-scroll if user isn't actively scrolled up.
+      root.scrollTop = root.scrollHeight
+    } else {
+      updateScrollToBottomButton(1)
     }
   }
   // Also update the global focused-session path so renderedEntryKeys stays in
@@ -1844,18 +1849,18 @@ function appendEnvelopeToStreamForTab(envelope, tab, root) {
   }
   tab.streamKeys.add(key)
   appendEntryWithGrouping(root, entry)
-  if (tab.name === focusedTabName) {
-    // Self-sent messages (typed into this dashboard's composer) always
-    // scroll to bottom — the user just took an explicit action and
-    // expects to see what they sent. Inbound from someone else only
-    // scrolls if the user was already near the bottom (don't fight a
-    // user who's scrolled up reading older history).
-    if (fromDashboardToSelf || isSent || isNearBottom(root)) {
-      root.scrollTop = root.scrollHeight
-      missedWhileScrolledUp = 0
-    } else {
-      updateScrollToBottomButton(1)
-    }
+  if (tab.name !== focusedTabName) {
+    // Background tabs always follow the tail — when the user switches
+    // back, the latest is what they see. The "scrolled up reading"
+    // pause is a focused-tab-only concern.
+    root.scrollTop = root.scrollHeight
+  } else if (fromDashboardToSelf || isSent || isNearBottom(root)) {
+    // Focused tab: scroll if self-sent OR user is already near bottom.
+    // Don't fight a user who's actively scrolled up reading history.
+    root.scrollTop = root.scrollHeight
+    missedWhileScrolledUp = 0
+  } else {
+    updateScrollToBottomButton(1)
   }
   // Mirror into the global renderedEntryKeys so the focused-tab dedup
   // path in renderStream doesn't re-append the same envelope on next fetch.
@@ -1898,6 +1903,13 @@ async function renderStreamForTab(tab) {
     if (textKey) tab.streamKeys.add(textKey)
     if (e.uuid) tab.lastRenderedUuid = e.uuid
     appendEntryWithGrouping(root, e)
+  }
+  // Snap to bottom after the initial fetch (background tabs always; the
+  // focused tab also wants the latest at first paint).
+  root.scrollTop = root.scrollHeight
+  if (tab.name === focusedTabName) {
+    missedWhileScrolledUp = 0
+    updateScrollToBottomButton(0)
   }
 }
 
@@ -3782,6 +3794,17 @@ function focusTab(name, opts) {
   tab.lastViewedAt = Date.now()
   unreadCounts[name] = 0
   refreshUnreadPill(tab)
+  // Snap the focused tab's transcript to the bottom on every focus —
+  // the latest message is always the relevant one. Any "scrolled up
+  // reading history" pause is reset by navigating away and back.
+  if (tab.contentEl) {
+    const stream = scopedById(tab.contentEl, 'detail-stream')
+    if (stream instanceof HTMLElement) {
+      stream.scrollTop = stream.scrollHeight
+    }
+  }
+  missedWhileScrolledUp = 0
+  updateScrollToBottomButton(0)
 
   // URL update
   const url = name === '' ? '/' : '/session/' + encodeURIComponent(name)
