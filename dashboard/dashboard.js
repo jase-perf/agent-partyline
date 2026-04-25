@@ -1592,11 +1592,15 @@ function handleSessionUpdate(session) {
 // the UserPromptSubmit hook fires, instead of waiting for JSONL poll +
 // transcript refetch. The canonical JSONL entry, when it later arrives,
 // dedupes against this pending entry via the 'user-text:' key (renderStream).
-function handleUserPromptLive(data) {
+/**
+ * @param {{ session_name?: string, [key: string]: unknown }} data
+ * @param {HTMLElement | null} [rootOverride]
+ */
+function handleUserPromptLive(data, rootOverride) {
   if (!data || !data.session_name || typeof data.prompt !== 'string') return
   if (currentView !== 'session-detail') return
   if (data.session_name !== selectedSessionId) return
-  const root = document.getElementById('detail-stream')
+  const root = rootOverride || document.getElementById('detail-stream')
   if (!root) return
   const textKey = 'user-text:' + data.prompt
   if (renderedEntryKeys.has(textKey)) return
@@ -1683,11 +1687,15 @@ function maybeHandleCompactForCurrentView(evPayload) {
 
 // Append a single party-line envelope directly to the stream without a
 // full /api/transcript fetch. Used for instant self-loopback feedback.
-function appendEnvelopeToStream(envelope) {
+/**
+ * @param {object} envelope
+ * @param {HTMLElement | null} [rootOverride]
+ */
+function appendEnvelopeToStream(envelope, rootOverride) {
   if (!envelope || !selectedSessionId) return
   // Skip protocol-level chatter — users never want to see these in a session view.
   if (envelope.type === 'heartbeat' || envelope.type === 'announce') return
-  const root = document.getElementById('detail-stream')
+  const root = rootOverride || document.getElementById('detail-stream')
   if (!root) return
   const key = envelope.id
   if (renderedEntryKeys.has(key)) return
@@ -2169,23 +2177,39 @@ function updateScrollToBottomButton(newlyMissed) {
   stream.addEventListener('scroll', () => updateScrollToBottomButton(0))
 })()
 
+/**
+ * @param {{
+ *   root?: HTMLElement | null,
+ *   sessionKey?: string,
+ *   agentId?: string | null,
+ *   archiveUuid?: string | null,
+ *   incremental?: boolean,
+ *   force?: boolean,
+ * }} [opts]
+ */
 async function renderStream(opts) {
-  const root = document.getElementById('detail-stream')
+  opts = opts || {}
+  // Backwards-compat fallback: if no root passed, use the legacy single
+  // detail-stream element. Task 7 wires per-tab roots; until then this
+  // branch lights the existing single-session path.
+  const root = opts.root || document.getElementById('detail-stream')
   if (!root) return
-  if (!selectedSessionId) {
+  const sessionKey = opts.sessionKey ?? selectedSessionId
+  const agentId = opts.agentId ?? selectedAgentId
+  const archiveUuid = opts.archiveUuid ?? selectedArchiveUuid
+  if (!sessionKey) {
     root.replaceChildren()
     return
   }
 
-  const streamKey =
-    selectedSessionId + '|' + (selectedAgentId || '') + '|' + (selectedArchiveUuid || '')
+  const streamKey = sessionKey + '|' + (agentId || '') + '|' + (archiveUuid || '')
   const isNewStream = streamKey !== renderedStreamKey
   const force = opts && opts.force
   // Incremental mode: only fetch entries after the last rendered uuid.
   // Disabled when: no prior uuid, new stream, force refetch, or viewing an
   // archive (archives are immutable — always fetch the full transcript).
   const incremental =
-    opts && opts.incremental && !isNewStream && !force && lastRenderedUuid && !selectedArchiveUuid
+    opts && opts.incremental && !isNewStream && !force && lastRenderedUuid && !archiveUuid
 
   if (isNewStream || force) {
     // Full rebuild path — show loading + replace everything.
@@ -2208,11 +2232,11 @@ async function renderStream(opts) {
   // (e.g., after compaction), so clients don't need special stale-uuid logic.
   let qs =
     'session_id=' +
-    encodeURIComponent(selectedSessionId) +
-    (selectedAgentId ? '&agent_id=' + encodeURIComponent(selectedAgentId) : '') +
+    encodeURIComponent(sessionKey) +
+    (agentId ? '&agent_id=' + encodeURIComponent(agentId) : '') +
     '&limit=300'
-  if (selectedArchiveUuid) {
-    qs += '&uuid=' + encodeURIComponent(selectedArchiveUuid)
+  if (archiveUuid) {
+    qs += '&uuid=' + encodeURIComponent(archiveUuid)
   } else if (incremental && lastRenderedUuid) {
     qs += '&after_uuid=' + encodeURIComponent(lastRenderedUuid)
   }
