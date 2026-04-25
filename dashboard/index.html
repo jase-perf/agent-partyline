@@ -49,10 +49,25 @@
         />
         <span>Party Line</span>
       </h1>
-      <nav class="tabs" id="tabs">
-        <button data-view="switchboard" class="active">Switchboard</button>
-        <button data-view="session-detail" disabled>Session</button>
-        <button data-view="history">History</button>
+      <nav class="tab-strip" id="tab-strip" aria-label="Sessions">
+        <button
+          type="button"
+          class="tab-strip-tab tab-strip-home"
+          id="tab-strip-switchboard"
+          data-tab-name=""
+          data-view="switchboard"
+          aria-current="page"
+        >
+          <span class="tab-strip-label">Switchboard</span>
+        </button>
+        <div class="tab-strip-sessions" id="tab-strip-sessions"></div>
+        <details class="tab-strip-overflow" id="tab-strip-overflow">
+          <summary aria-label="More views" title="More views">⋯</summary>
+          <div class="tab-strip-overflow-menu">
+            <button type="button" data-view="machines">Machines</button>
+            <button type="button" data-view="history">History</button>
+          </div>
+        </details>
       </nav>
       <div class="header-quota" id="quotaPanel" hidden title="API quota usage">
         <span class="quota-pip" id="quota5hPip" style="--pct: 0%">
@@ -119,102 +134,107 @@
       </section>
 
       <section data-view="session-detail" class="view" hidden>
-        <div class="detail-header">
-          <button id="detail-drawer-toggle" class="drawer-btn" title="Agents">≡</button>
-          <button id="detail-back" class="back-btn" title="Back to Switchboard">‹</button>
-          <span class="state-pill" id="detail-state"></span>
-          <button
-            id="detail-bell"
-            class="notif-bell-detail"
-            type="button"
-            title="Toggle notifications"
-            aria-label="Notifications: off"
-            hidden
-          >
-            🔕
-          </button>
-          <button
-            id="detail-actions"
-            class="detail-actions-btn"
-            type="button"
-            title="Session actions"
-            aria-label="Session actions"
-            aria-haspopup="menu"
-          >
-            ⋯
-          </button>
-          <h2 id="detail-name"></h2>
-          <div class="archive-banner" id="archive-banner" hidden>
-            <span id="archive-banner-text">Viewing archive</span>
-            <a class="archive-back" id="archive-back-link" href="#">← Back to live</a>
-          </div>
-          <div class="detail-meta">
-            <span id="detail-cwd"></span>
-            <span id="detail-model"></span>
-            <span id="detail-ctx"></span>
-            <span id="detail-subagents"></span>
-            <span id="detail-last"></span>
-            <span id="detail-host"></span>
-          </div>
-        </div>
-        <div class="detail-body">
-          <aside class="detail-sidebar" id="detail-sidebar">
-            <div class="sidebar-section sidebar-agents">
-              <div class="sidebar-label">AGENTS</div>
-              <ul id="detail-tree"></ul>
+        <div class="session-tab-content" data-tab-content-template hidden>
+          <div class="detail-header">
+            <button id="detail-drawer-toggle" class="drawer-btn" title="Agents">≡</button>
+            <button id="detail-back" class="back-btn" title="Back to Switchboard">‹</button>
+            <span class="state-pill" id="detail-state"></span>
+            <button
+              id="detail-bell"
+              class="notif-bell-detail"
+              type="button"
+              title="Toggle notifications"
+              aria-label="Notifications: off"
+              hidden
+            >
+              🔕
+            </button>
+            <button
+              id="detail-actions"
+              class="detail-actions-btn"
+              type="button"
+              title="Session actions"
+              aria-label="Session actions"
+              aria-haspopup="menu"
+            >
+              ⋯
+            </button>
+            <h2 id="detail-name"></h2>
+            <div class="archive-banner" id="archive-banner" hidden>
+              <span id="archive-banner-text">Viewing archive</span>
+              <a class="archive-back" id="archive-back-link" href="#">← Back to live</a>
             </div>
-            <div class="sidebar-section sidebar-history">
-              <div class="sidebar-label">HISTORY</div>
-              <ul id="detail-history"></ul>
+            <div class="detail-meta">
+              <span id="detail-cwd"></span>
+              <span id="detail-model"></span>
+              <span id="detail-ctx"></span>
+              <span id="detail-subagents"></span>
+              <span id="detail-last"></span>
+              <span id="detail-host"></span>
             </div>
-          </aside>
-          <main class="detail-stream" id="detail-stream"></main>
-          <button
-            type="button"
-            class="scroll-to-bottom"
-            id="scroll-to-bottom"
-            hidden
-            aria-label="Scroll to latest"
-          >
-            ↓ New
-          </button>
-        </div>
-        <form
-          class="detail-send"
-          id="detail-send"
-          onsubmit="
-            event.preventDefault()
-            doDetailSend()
-          "
-        >
-          <div class="attach-chips" id="detail-attach-chips" hidden></div>
-          <div class="detail-send-row">
+          </div>
+          <div class="detail-body">
+            <aside class="detail-sidebar" id="detail-sidebar">
+              <div class="sidebar-section sidebar-agents">
+                <div class="sidebar-label">AGENTS</div>
+                <ul id="detail-tree"></ul>
+              </div>
+              <div class="sidebar-section sidebar-history">
+                <div class="sidebar-label">HISTORY</div>
+                <ul id="detail-history"></ul>
+              </div>
+            </aside>
+            <main class="detail-stream" id="detail-stream"></main>
             <button
               type="button"
-              id="detail-attach-btn"
-              class="attach-btn"
-              title="Attach files"
-              aria-label="Attach files"
-            >
-              +
-            </button>
-            <input
-              type="file"
-              id="detail-attach-input"
-              multiple
+              class="scroll-to-bottom"
+              id="scroll-to-bottom"
               hidden
-              accept="image/*,.pdf,.txt,.md,.json,.csv,.log,.zip"
-            />
-            <textarea
-              id="detail-send-msg"
-              class="msg"
-              placeholder="Message this session... (paste or drop files to attach)"
-              rows="1"
-              autocomplete="off"
-            ></textarea>
-            <button type="submit">Send</button>
+              aria-label="Scroll to latest"
+            >
+              ↓ New
+            </button>
           </div>
-        </form>
+          <form
+            class="detail-send"
+            id="detail-send"
+            onsubmit="
+              event.preventDefault()
+              doDetailSend()
+            "
+          >
+            <div class="attach-chips" id="detail-attach-chips" hidden></div>
+            <div class="detail-send-row">
+              <button
+                type="button"
+                id="detail-attach-btn"
+                class="attach-btn"
+                title="Attach files"
+                aria-label="Attach files"
+              >
+                +
+              </button>
+              <input
+                type="file"
+                id="detail-attach-input"
+                multiple
+                hidden
+                accept="image/*,.pdf,.txt,.md,.json,.csv,.log,.zip"
+              />
+              <textarea
+                id="detail-send-msg"
+                class="msg"
+                placeholder="Message this session... (paste or drop files to attach)"
+                rows="1"
+                autocomplete="off"
+              ></textarea>
+              <button type="submit">Send</button>
+            </div>
+          </form>
+        </div>
+        <div class="session-tab-stack" id="session-tab-stack">
+          <!-- Per-tab clones of the template above are inserted here at runtime -->
+        </div>
       </section>
 
       <section data-view="history" class="view" hidden>
