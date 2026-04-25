@@ -1889,20 +1889,41 @@ function openSessionDetail(sessionName) {
   navigate({ view: 'session-detail', sessionName, agentId: null })
 }
 
-async function loadSessionDetailView() {
-  if (!selectedSessionId) return
-  const sessionKey = selectedSessionId
+/**
+ * @param {{
+ *   sessionKey?: string,
+ *   agentId?: string | null,
+ *   archiveUuid?: string | null,
+ *   contentRoot?: HTMLElement,
+ * }} [opts]
+ */
+async function loadSessionDetailView(opts) {
+  opts = opts || {}
+  const sessionKey = opts.sessionKey ?? selectedSessionId
+  if (!sessionKey) return
+  const agentId = opts.agentId ?? selectedAgentId
+  const archiveUuid = opts.archiveUuid ?? selectedArchiveUuid
+  /** @type {Document | HTMLElement} */
+  const root = opts.contentRoot || document
 
-  document.getElementById('detail-name').textContent = sessionKey
+  /** @param {string} id @returns {HTMLElement | null} */
+  function byId(id) {
+    return root === document
+      ? document.getElementById(id)
+      : /** @type {HTMLElement} */ (root).querySelector('#' + id)
+  }
+
+  const nameEl = byId('detail-name')
+  if (nameEl) nameEl.textContent = sessionKey
   updateDetailBell(sessionKey)
   // Reflect archive mode in the URL even before fetches complete.
-  setArchiveMode(sessionKey, selectedArchiveUuid)
+  setArchiveMode(sessionKey, archiveUuid)
 
   // Wipe the previous session's content synchronously, before any awaits.
   // On slow networks the /api/session and /api/transcript fetches can take
   // several seconds; without an upfront reset the user sees the previous
   // session's transcript and sidebar agents under the new session's header.
-  resetDetailViewForSwitch()
+  resetDetailViewForSwitch(root)
 
   try {
     const r = await fetch('/api/session?id=' + encodeURIComponent(sessionKey))
@@ -1912,17 +1933,22 @@ async function loadSessionDetailView() {
     if (selectedSessionId !== sessionKey) return
     currentSessionSubagents = data.subagents || []
     if (data.session) renderDetailHeader(data.session)
-    renderAgentTree()
+    renderAgentTree(root)
   } catch (e) {
     console.warn('session fetch failed', e)
   }
 
   if (selectedSessionId !== sessionKey) return
-  renderHistorySidebar(selectedSessionId, selectedArchiveUuid)
+  renderHistorySidebar(sessionKey, archiveUuid, root)
 
-  // selectedAgentId is set by the router before loadSessionDetailView is called;
+  // agentId is set by the router before loadSessionDetailView is called;
   // do not reset it here so deep-linked agent views are honoured.
-  await renderStream()
+  await renderStream({
+    root: byId('detail-stream'),
+    sessionKey,
+    agentId,
+    archiveUuid,
+  })
 }
 
 /**
@@ -1930,9 +1956,17 @@ async function loadSessionDetailView() {
  * loading state. Called at the start of loadSessionDetailView so the user
  * never sees the prior session's transcript / sidebar / header data while
  * the new session's fetches are in flight.
+ * @param {Document | HTMLElement} [scope]
  */
-function resetDetailViewForSwitch() {
-  const stream = document.getElementById('detail-stream')
+function resetDetailViewForSwitch(scope) {
+  scope = scope || document
+  /** @param {string} id @returns {HTMLElement | null} */
+  function byId(id) {
+    return scope === document
+      ? document.getElementById(id)
+      : /** @type {HTMLElement} */ (scope).querySelector('#' + id)
+  }
+  const stream = byId('detail-stream')
   if (stream) {
     stream.replaceChildren()
     const loading = document.createElement('p')
@@ -1949,15 +1983,15 @@ function resetDetailViewForSwitch() {
   // Sidebar agent tree — currentSessionSubagents holds the prior session's
   // rows until /api/session resolves.
   currentSessionSubagents = []
-  renderAgentTree()
+  renderAgentTree(scope)
 
   // Sidebar history rows — renderHistorySidebar will repopulate them once
   // /api/archives resolves.
-  const hist = document.getElementById('detail-history')
+  const hist = byId('detail-history')
   if (hist) hist.replaceChildren()
 
   // Header data fields except the name (set by the caller above).
-  const stateEl = document.getElementById('detail-state')
+  const stateEl = byId('detail-state')
   if (stateEl) {
     stateEl.textContent = ''
     stateEl.className = 'state-pill'
@@ -1970,7 +2004,7 @@ function resetDetailViewForSwitch() {
     'detail-last',
     'detail-ctx',
   ]) {
-    const el = document.getElementById(id)
+    const el = byId(id)
     if (el) el.textContent = ''
   }
 }
@@ -2051,8 +2085,15 @@ function updateDetailBell(sessionName) {
   bell.disabled = permDenied
 }
 
-function renderAgentTree() {
-  const ul = document.getElementById('detail-tree')
+/**
+ * @param {Document | HTMLElement} [scope]
+ */
+function renderAgentTree(scope) {
+  scope = scope || document
+  const ul =
+    scope === document
+      ? document.getElementById('detail-tree')
+      : /** @type {HTMLElement} */ (scope).querySelector('#detail-tree')
   ul.replaceChildren()
 
   // 'main' row — always visible at top
@@ -3602,8 +3643,17 @@ connect()
 // live + archived cc_session_uuid for the selected session. Backend endpoints
 // /api/archives and /api/archive-label feed this.
 
-async function renderHistorySidebar(sessionName, currentArchiveUuid) {
-  var el = document.getElementById('detail-history')
+/**
+ * @param {string} sessionName
+ * @param {string | null} currentArchiveUuid
+ * @param {Document | HTMLElement} [scope]
+ */
+async function renderHistorySidebar(sessionName, currentArchiveUuid, scope) {
+  scope = scope || document
+  var el =
+    scope === document
+      ? document.getElementById('detail-history')
+      : /** @type {HTMLElement} */ (scope).querySelector('#detail-history')
   if (!el) return
   el.replaceChildren()
   var res = await fetch('/api/archives?session=' + encodeURIComponent(sessionName))
