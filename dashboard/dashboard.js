@@ -2115,14 +2115,17 @@ async function loadSessionDetailView(opts) {
   // show stale data from a different session. The guard only applies when
   // rendering into the shared document-level view.
   const isIsolated = !!opts.contentRoot
+  const tab = isIsolated ? tabRegistry.get(sessionKey) : null
   try {
     const r = await fetch('/api/session?id=' + encodeURIComponent(sessionKey))
     const data = await r.json()
     // The user may have navigated to a different session by the time this
     // resolves — drop the response if the selection has moved on.
     if (!isIsolated && selectedSessionId !== sessionKey) return
-    currentSessionSubagents = data.subagents || []
-    if (data.session) renderDetailHeader(data.session)
+    const subs = data.subagents || []
+    if (tab) tab.subagents = subs
+    if (!isIsolated || focusedTabName === sessionKey) currentSessionSubagents = subs
+    if (data.session) renderDetailHeader(data.session, root)
     renderAgentTree(root)
   } catch (e) {
     console.warn('session fetch failed', e)
@@ -2133,12 +2136,20 @@ async function loadSessionDetailView(opts) {
 
   // agentId is set by the router before loadSessionDetailView is called;
   // do not reset it here so deep-linked agent views are honoured.
-  await renderStream({
-    root: scopedById(root, 'detail-stream'),
-    sessionKey,
-    agentId,
-    archiveUuid,
-  })
+  if (tab) {
+    // Per-tab path: use the tab-local renderer so concurrent prefetches
+    // don't trample the global renderedStreamKey/renderedEntryKeys/
+    // lastRenderedUuid cursor that renderStream relies on. tab.streamKeys
+    // + tab.lastRenderedUuid keep each tab independent.
+    await renderStreamForTab(tab)
+  } else {
+    await renderStream({
+      root: scopedById(root, 'detail-stream'),
+      sessionKey,
+      agentId,
+      archiveUuid,
+    })
+  }
 }
 
 /**
@@ -2193,11 +2204,20 @@ function resetDetailViewForSwitch(scope) {
   }
 }
 
-function renderDetailHeader(session) {
-  const pill = document.getElementById('detail-state')
+/**
+ * @param {{name?: string, state?: string, cwd?: string, model?: string,
+ *   context_tokens?: number | null, machine_id?: string,
+ *   active_subagents?: number, last_text?: string}} session
+ * @param {Document | HTMLElement} [scope]
+ */
+function renderDetailHeader(session, scope) {
+  scope = scope || document
+  const pill = scopedById(scope, 'detail-state')
+  if (!pill) return
   pill.className = 'state-pill state-' + (session.state || 'idle')
   pill.textContent = (session.state || 'idle').toUpperCase()
-  document.getElementById('detail-cwd').textContent = session.cwd || ''
+  const cwdEl = scopedById(scope, 'detail-cwd')
+  if (cwdEl) cwdEl.textContent = session.cwd || ''
 
   // Fall back to multicast status for ctx/model since the aggregator's
   // sessions table doesn't capture those from hook payloads.
@@ -2206,29 +2226,34 @@ function renderDetailHeader(session) {
   const st = multicast && multicast.metadata && multicast.metadata.status
 
   const model = session.model || (st && st.model)
-  document.getElementById('detail-model').textContent = model ? model.replace('claude-', '') : ''
+  const modelEl = scopedById(scope, 'detail-model')
+  if (modelEl) modelEl.textContent = model ? model.replace('claude-', '') : ''
 
   const ctxTokens = (st && st.contextTokens) || session.context_tokens
-  const ctxEl = document.getElementById('detail-ctx')
-  if (ctxTokens) {
-    const limit = getEffectiveContextLimit(name, st)
-    const pct = Math.round((ctxTokens / limit) * 100)
-    ctxEl.textContent = ''
-    ctxEl.appendChild(buildCtxBar(pct, { label: 'ctx', tokens: ctxTokens, limit }))
-  } else {
-    ctxEl.textContent = ''
+  const ctxEl = scopedById(scope, 'detail-ctx')
+  if (ctxEl) {
+    if (ctxTokens) {
+      const limit = getEffectiveContextLimit(name, st)
+      const pct = Math.round((ctxTokens / limit) * 100)
+      ctxEl.textContent = ''
+      ctxEl.appendChild(buildCtxBar(pct, { label: 'ctx', tokens: ctxTokens, limit }))
+    } else {
+      ctxEl.textContent = ''
+    }
   }
 
-  const hostEl = document.getElementById('detail-host')
-  if (session.machine_id && localMachineId && session.machine_id !== localMachineId) {
-    hostEl.textContent = 'host: ' + session.machine_id.slice(0, 8)
-  } else {
-    hostEl.textContent = ''
+  const hostEl = scopedById(scope, 'detail-host')
+  if (hostEl) {
+    if (session.machine_id && localMachineId && session.machine_id !== localMachineId) {
+      hostEl.textContent = 'host: ' + session.machine_id.slice(0, 8)
+    } else {
+      hostEl.textContent = ''
+    }
   }
 
   // Active subagents for this session (the aggregator enriches session-update
   // with active_subagents; fall back to the cached per-name count).
-  const subEl = document.getElementById('detail-subagents')
+  const subEl = scopedById(scope, 'detail-subagents')
   if (subEl) {
     const n =
       typeof session.active_subagents === 'number'
@@ -2238,7 +2263,7 @@ function renderDetailHeader(session) {
   }
 
   // Last message / tool excerpt — what is the session actually doing right now?
-  const lastEl = document.getElementById('detail-last')
+  const lastEl = scopedById(scope, 'detail-last')
   if (lastEl) {
     let snippet = ''
     if (session.state === 'working' && st && st.currentTool) {
@@ -3097,7 +3122,14 @@ function addFiles(fileList) {
  * @param {HTMLFormElement} form
  */
 function doDetailSend(form) {
-  if (!selectedSessionId) return
+  // Per-tab clones have a .session-tab-content[data-tab-name="X"] wrapper;
+  // derive the target session from there. selectedSessionId is null in the
+  // tab-driven world (only the legacy single-tab path set it), so reading
+  // it as the source-of-truth would silently bail every send.
+  const tabContent = form.closest('.session-tab-content')
+  const targetName =
+    (tabContent instanceof HTMLElement && tabContent.dataset.tabName) || selectedSessionId
+  if (!targetName) return
   const textarea = /** @type {HTMLTextAreaElement | null} */ (
     form.querySelector('#detail-send-msg, [data-orig-id="detail-send-msg"]')
   )
@@ -3112,7 +3144,7 @@ function doDetailSend(form) {
     return
   }
   const payload = {
-    to: selectedSessionId,
+    to: targetName,
     message: msg,
     type: 'message',
     attachment_ids: readyAtts.map((p) => p.id),
