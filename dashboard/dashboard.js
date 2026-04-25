@@ -399,12 +399,14 @@ function connect() {
       } catch (err) {
         console.error('[notifications] onPartyLineMessage threw', err)
       }
-      if (
-        currentView === 'session-detail' &&
-        selectedSessionId &&
-        (adapted.from === selectedSessionId || adapted.to === selectedSessionId)
-      ) {
-        appendEnvelopeToStream(adapted)
+      // Fan the envelope into every tab whose session matches (focused or not).
+      for (const tab of tabRegistry.values()) {
+        if (tab.name === '') continue
+        if (!tab.contentEl) continue
+        if (adapted.from !== tab.name && adapted.to !== tab.name) continue
+        const streamRoot = scopedById(tab.contentEl, 'detail-stream')
+        if (streamRoot instanceof HTMLElement)
+          appendEnvelopeToStreamForTab(adapted, tab, streamRoot)
       }
     } else if (data.type === 'permission-request') {
       try {
@@ -1643,23 +1645,37 @@ function handleSessionUpdate(session) {
  */
 function handleUserPromptLive(data, rootOverride) {
   if (!data || !data.session_name || typeof data.prompt !== 'string') return
-  if (currentView !== 'session-detail') return
-  if (data.session_name !== selectedSessionId) return
-  const root = rootOverride || document.getElementById('detail-stream')
-  if (!root) return
-  const textKey = 'user-text:' + data.prompt
-  if (renderedEntryKeys.has(textKey)) return
-  renderedEntryKeys.add(textKey)
   const entry = {
     uuid: 'pending:' + (data.session_id || '') + ':' + data.ts,
     ts: data.ts || new Date().toISOString(),
     type: 'user',
     text: data.prompt,
   }
-  renderedEntryKeys.add(entry.uuid)
-  const wasNearBottom = isNearBottom(root)
-  appendEntryWithGrouping(root, entry)
-  if (wasNearBottom) root.scrollTop = root.scrollHeight
+  const textKey = 'user-text:' + data.prompt
+  // Fan into every matching tab (focused or background).
+  for (const tab of tabRegistry.values()) {
+    if (tab.name === '') continue
+    if (!tab.contentEl) continue
+    if (data.session_name !== tab.name) continue
+    // Dedup via per-tab streamKeys (both the text key and the uuid).
+    if (tab.streamKeys.has(textKey) || tab.streamKeys.has(entry.uuid)) continue
+    tab.streamKeys.add(textKey)
+    tab.streamKeys.add(entry.uuid)
+    const root = rootOverride || scopedById(tab.contentEl, 'detail-stream')
+    if (!(root instanceof HTMLElement)) continue
+    appendEntryWithGrouping(root, entry)
+    // Scroll only if this is the tab the user is currently looking at.
+    if (tab.name === focusedTabName) {
+      if (isNearBottom(root)) root.scrollTop = root.scrollHeight
+    }
+  }
+  // Also update the global focused-session path so renderedEntryKeys stays in
+  // sync for the incremental dedup in renderStream (used when the JSONL fetch
+  // later arrives with the same entry).
+  if (data.session_name === selectedSessionId) {
+    renderedEntryKeys.add(textKey)
+    renderedEntryKeys.add(entry.uuid)
+  }
 }
 
 // Claude Code API errors (overloaded / rate-limit) don't fire a Stop hook —
@@ -1677,17 +1693,27 @@ function handleApiError(data) {
 }
 
 function handleJsonlEvent(update) {
-  if (currentView !== 'session-detail') return
   if (!update) return
-  const parentMatches =
-    update.session_id === selectedSessionId ||
-    resolveNameFromJsonlPath(update.file_path) === selectedSessionId
-  const agentMatches = selectedAgentId && update.session_id === selectedAgentId
-  if (!parentMatches && !agentMatches) return
-  // Use incremental mode: only fetch entries appended since the last render.
-  // renderStream will fall back to a full fetch if lastRenderedUuid is null
-  // (first load) or if the server can't find the uuid (post-compaction).
-  renderStream({ incremental: true })
+  const sessionName = resolveNameFromJsonlPath(update.file_path)
+  const sessionId = update.session_id
+  // Fan into every matching tab (focused or background).
+  for (const tab of tabRegistry.values()) {
+    if (tab.name === '') continue
+    if (!tab.contentEl) continue
+    if (sessionName !== tab.name && sessionId !== tab.name) continue
+    if (tab.name === focusedTabName) {
+      // Focused tab: use the existing global renderStream path so its
+      // incremental cursor (lastRenderedUuid, renderedEntryKeys) stays correct.
+      const agentMatches = selectedAgentId && sessionId === selectedAgentId
+      if (sessionName === selectedSessionId || sessionId === selectedSessionId || agentMatches) {
+        renderStream({ incremental: true })
+      }
+    } else {
+      // Background tab: incremental fetch into this tab's own stream root,
+      // using the tab's own lastRenderedUuid to avoid re-fetching everything.
+      void renderStreamForTab(tab)
+    }
+  }
 }
 
 /**
@@ -1780,6 +1806,98 @@ function appendEnvelopeToStream(envelope, rootOverride) {
     missedWhileScrolledUp = 0
   } else {
     updateScrollToBottomButton(1)
+  }
+}
+
+/**
+ * Per-tab variant of appendEnvelopeToStream. Uses the tab's own streamKeys
+ * for dedup (not the global renderedEntryKeys) so background tabs stay live
+ * without disturbing the focused tab's dedup state.
+ *
+ * @param {object} envelope
+ * @param {Tab} tab
+ * @param {HTMLElement} root
+ */
+function appendEnvelopeToStreamForTab(envelope, tab, root) {
+  if (!envelope) return
+  if (envelope.type === 'heartbeat' || envelope.type === 'announce') return
+  const key = envelope.id
+  if (tab.streamKeys.has(key)) return
+  const isSent = envelope.from === tab.name
+  const fromDashboardToSelf = envelope.from === 'dashboard' && envelope.to === tab.name
+  let entry
+  if (fromDashboardToSelf) {
+    entry = {
+      uuid: envelope.id,
+      ts: envelope.ts,
+      type: 'user',
+      text: envelope.body,
+      attachments: envelope.attachments,
+    }
+  } else {
+    entry = {
+      uuid: envelope.id,
+      ts: envelope.ts,
+      type: isSent ? 'party-line-send' : 'party-line-receive',
+      envelope_id: envelope.id,
+      other_session: isSent ? envelope.to : envelope.from,
+      body: envelope.body,
+      callback_id: envelope.callback_id || undefined,
+      envelope_type: envelope.type,
+      attachments: envelope.attachments,
+    }
+  }
+  tab.streamKeys.add(key)
+  appendEntryWithGrouping(root, entry)
+  if (tab.name === focusedTabName) {
+    if (isNearBottom(root)) {
+      root.scrollTop = root.scrollHeight
+      missedWhileScrolledUp = 0
+    } else {
+      updateScrollToBottomButton(1)
+    }
+  }
+  // Mirror into the global renderedEntryKeys so the focused-tab dedup
+  // path in renderStream doesn't re-append the same envelope on next fetch.
+  if (tab.name === focusedTabName) renderedEntryKeys.add(key)
+}
+
+/**
+ * Incremental transcript fetch for a background tab. Uses the tab's own
+ * lastRenderedUuid cursor and streamKeys dedup set, completely independent
+ * of the global renderStream state machine. Called by handleJsonlEvent for
+ * every tab that is not currently focused.
+ *
+ * @param {Tab} tab
+ */
+async function renderStreamForTab(tab) {
+  if (!tab.contentEl) return
+  const root = scopedById(tab.contentEl, 'detail-stream')
+  if (!(root instanceof HTMLElement)) return
+  const sessionKey = tab.name
+  let qs = 'session_id=' + encodeURIComponent(sessionKey) + '&limit=300'
+  if (tab.lastRenderedUuid) {
+    qs += '&after_uuid=' + encodeURIComponent(tab.lastRenderedUuid)
+  }
+  let entries
+  try {
+    const r = await fetch('/api/transcript?' + qs)
+    entries = await r.json()
+  } catch {
+    return
+  }
+  if (!Array.isArray(entries) || entries.length === 0) return
+  // Guard: tab may have been evicted or navigated away while fetch was in flight.
+  if (!tab.contentEl) return
+  for (const e of entries) {
+    const key = e.uuid || e.ts + '|' + e.type + '|' + (e.envelope_id || '')
+    const textKey = e.type === 'user' && e.text ? 'user-text:' + e.text : null
+    if (tab.streamKeys.has(key)) continue
+    if (textKey && tab.streamKeys.has(textKey)) continue
+    tab.streamKeys.add(key)
+    if (textKey) tab.streamKeys.add(textKey)
+    if (e.uuid) tab.lastRenderedUuid = e.uuid
+    appendEntryWithGrouping(root, e)
   }
 }
 
