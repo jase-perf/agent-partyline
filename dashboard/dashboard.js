@@ -971,6 +971,10 @@ function updateSessions(sessions) {
       pendingRouteState = null
       applyRoute(s, { skipPush: true })
     }
+    // Prefetch on the first snapshot only — runs concurrently with whatever
+    // view the user is focused on. Don't await; let it fill in the
+    // background.
+    void prefetchAllPinnedTabs()
   }
 }
 
@@ -1993,12 +1997,17 @@ async function loadSessionDetailView(opts) {
   // session's transcript and sidebar agents under the new session's header.
   resetDetailViewForSwitch(root)
 
+  // When rendering into an isolated per-tab clone (contentRoot is set) we
+  // don't guard on selectedSessionId — the clone is tab-owned and can't
+  // show stale data from a different session. The guard only applies when
+  // rendering into the shared document-level view.
+  const isIsolated = !!opts.contentRoot
   try {
     const r = await fetch('/api/session?id=' + encodeURIComponent(sessionKey))
     const data = await r.json()
     // The user may have navigated to a different session by the time this
     // resolves — drop the response if the selection has moved on.
-    if (selectedSessionId !== sessionKey) return
+    if (!isIsolated && selectedSessionId !== sessionKey) return
     currentSessionSubagents = data.subagents || []
     if (data.session) renderDetailHeader(data.session)
     renderAgentTree(root)
@@ -2006,7 +2015,7 @@ async function loadSessionDetailView(opts) {
     console.warn('session fetch failed', e)
   }
 
-  if (selectedSessionId !== sessionKey) return
+  if (!isIsolated && selectedSessionId !== sessionKey) return
   renderHistorySidebar(sessionKey, archiveUuid, root)
 
   // agentId is set by the router before loadSessionDetailView is called;
@@ -3661,6 +3670,61 @@ function syncStripFromSessions(sessions) {
     if (!tab) continue
     setTabOnlineState(tab, s.online, s.state)
   }
+}
+
+/**
+ * Run an async task per item with a parallelism cap. Resolves once all
+ * tasks have completed (or rejected). Errors from individual tasks are
+ * swallowed (logged via console.warn) — one failed prefetch must not
+ * block the others.
+ *
+ * @template T
+ * @param {T[]} items
+ * @param {number} cap
+ * @param {(item: T) => Promise<void>} run
+ */
+async function runWithCap(items, cap, run) {
+  let i = 0
+  /** @type {Promise<void>[]} */
+  const workers = []
+  const next = async () => {
+    while (i < items.length) {
+      const idx = i++
+      try {
+        await run(items[idx])
+      } catch (err) {
+        console.warn('[prefetch] task failed for', items[idx], err)
+      }
+    }
+  }
+  for (let w = 0; w < Math.max(1, cap); w++) workers.push(next())
+  await Promise.all(workers)
+}
+
+/**
+ * For every pinned, non-focused, content-empty tab, kick off a
+ * loadSessionDetailView so its DOM is populated by the time the user
+ * focuses it. Capped at PREFETCH_PARALLELISM concurrent fetches.
+ */
+async function prefetchAllPinnedTabs() {
+  /** @type {Tab[]} */
+  const targets = []
+  for (const tab of tabRegistry.values()) {
+    if (tab.name === '') continue // Switchboard home doesn't load
+    if (!tab.contentEl) continue // evicted — skip
+    if (tab.contentEl.dataset.loaded === 'true') continue
+    targets.push(tab)
+  }
+  await runWithCap(targets, PREFETCH_PARALLELISM, async (tab) => {
+    if (!tab.contentEl) return
+    tab.contentEl.dataset.loaded = 'true'
+    await loadSessionDetailView({
+      sessionKey: tab.name,
+      agentId: tab.agentId,
+      archiveUuid: tab.archiveUuid,
+      contentRoot: tab.contentEl,
+    })
+  })
 }
 
 /**
