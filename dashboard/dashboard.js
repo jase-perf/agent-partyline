@@ -1936,6 +1936,25 @@ function openSessionDetail(sessionName) {
 }
 
 /**
+ * Scope-aware element lookup. For `document`, uses getElementById.
+ * For an HTMLElement (per-tab clone), tries `#id` first then falls back
+ * to `[data-orig-id="id"]` — pinTab strips IDs from clones and stashes
+ * them in data-orig-id to avoid duplicate-id collisions across tabs.
+ *
+ * @param {Document | HTMLElement} scope
+ * @param {string} id
+ * @returns {HTMLElement | null}
+ */
+function scopedById(scope, id) {
+  if (scope === document) return document.getElementById(id)
+  const root = /** @type {HTMLElement} */ (scope)
+  const direct = root.querySelector('#' + CSS.escape(id))
+  if (direct instanceof HTMLElement) return direct
+  const orig = root.querySelector('[data-orig-id="' + CSS.escape(id) + '"]')
+  return orig instanceof HTMLElement ? orig : null
+}
+
+/**
  * @param {{
  *   sessionKey?: string,
  *   agentId?: string | null,
@@ -1952,14 +1971,7 @@ async function loadSessionDetailView(opts) {
   /** @type {Document | HTMLElement} */
   const root = opts.contentRoot || document
 
-  /** @param {string} id @returns {HTMLElement | null} */
-  function byId(id) {
-    return root === document
-      ? document.getElementById(id)
-      : /** @type {HTMLElement} */ (root).querySelector('#' + id)
-  }
-
-  const nameEl = byId('detail-name')
+  const nameEl = scopedById(root, 'detail-name')
   if (nameEl) nameEl.textContent = sessionKey
   updateDetailBell(sessionKey)
   // Reflect archive mode in the URL even before fetches complete.
@@ -1990,7 +2002,7 @@ async function loadSessionDetailView(opts) {
   // agentId is set by the router before loadSessionDetailView is called;
   // do not reset it here so deep-linked agent views are honoured.
   await renderStream({
-    root: byId('detail-stream'),
+    root: scopedById(root, 'detail-stream'),
     sessionKey,
     agentId,
     archiveUuid,
@@ -2006,13 +2018,7 @@ async function loadSessionDetailView(opts) {
  */
 function resetDetailViewForSwitch(scope) {
   scope = scope || document
-  /** @param {string} id @returns {HTMLElement | null} */
-  function byId(id) {
-    return scope === document
-      ? document.getElementById(id)
-      : /** @type {HTMLElement} */ (scope).querySelector('#' + id)
-  }
-  const stream = byId('detail-stream')
+  const stream = scopedById(scope, 'detail-stream')
   if (stream) {
     stream.replaceChildren()
     const loading = document.createElement('p')
@@ -2033,11 +2039,11 @@ function resetDetailViewForSwitch(scope) {
 
   // Sidebar history rows — renderHistorySidebar will repopulate them once
   // /api/archives resolves.
-  const hist = byId('detail-history')
+  const hist = scopedById(scope, 'detail-history')
   if (hist) hist.replaceChildren()
 
   // Header data fields except the name (set by the caller above).
-  const stateEl = byId('detail-state')
+  const stateEl = scopedById(scope, 'detail-state')
   if (stateEl) {
     stateEl.textContent = ''
     stateEl.className = 'state-pill'
@@ -2050,7 +2056,7 @@ function resetDetailViewForSwitch(scope) {
     'detail-last',
     'detail-ctx',
   ]) {
-    const el = byId(id)
+    const el = scopedById(scope, id)
     if (el) el.textContent = ''
   }
 }
@@ -2136,10 +2142,7 @@ function updateDetailBell(sessionName) {
  */
 function renderAgentTree(scope) {
   scope = scope || document
-  const ul =
-    scope === document
-      ? document.getElementById('detail-tree')
-      : /** @type {HTMLElement} */ (scope).querySelector('#detail-tree')
+  const ul = scopedById(scope, 'detail-tree')
   if (!ul) return
   ul.replaceChildren()
 
@@ -2958,9 +2961,15 @@ function addFiles(fileList) {
   }
 }
 
-function doDetailSend() {
+/**
+ * @param {HTMLFormElement} form
+ */
+function doDetailSend(form) {
   if (!selectedSessionId) return
-  const textarea = document.getElementById('detail-send-msg')
+  const textarea = /** @type {HTMLTextAreaElement | null} */ (
+    form.querySelector('#detail-send-msg, [data-orig-id="detail-send-msg"]')
+  )
+  if (!textarea) return
   const msg = textarea.value.trim()
   const readyAtts = pendingAttachments.filter((p) => p.status === 'ready' && p.id)
   if (!msg && readyAtts.length === 0) return
@@ -2984,7 +2993,7 @@ function doDetailSend() {
     console.error('[detail-send] send failed', err)
   })
   textarea.value = ''
-  autosizeDetailSend()
+  autosizeDetailSend(textarea)
   textarea.focus()
   // Clear chips (revoke object URLs).
   for (const p of pendingAttachments) if (p.objectUrl) URL.revokeObjectURL(p.objectUrl)
@@ -2992,26 +3001,32 @@ function doDetailSend() {
   renderAttachChips()
 }
 
-// Auto-resize the session send textarea up to ~4 lines, then scroll.
-function autosizeDetailSend() {
-  const ta = document.getElementById('detail-send-msg')
-  if (!ta) return
-  ta.style.height = 'auto'
-  const max = 4 * parseFloat(getComputedStyle(ta).lineHeight || '20') + 16
-  ta.style.height = Math.min(ta.scrollHeight, max) + 'px'
+/**
+ * Auto-resize the session send textarea up to ~4 lines, then scroll.
+ * Pass a specific textarea element, or omit to fall back to document lookup.
+ * @param {HTMLElement | null} [ta]
+ */
+function autosizeDetailSend(ta) {
+  const el = ta || document.getElementById('detail-send-msg')
+  if (!el) return
+  el.style.height = 'auto'
+  const max = 4 * parseFloat(getComputedStyle(el).lineHeight || '20') + 16
+  el.style.height = Math.min(el.scrollHeight, max) + 'px'
 }
 
-// Wire textarea behaviors once.
+// Wire textarea behaviors once (for the template's hidden copy).
+// Per-tab clones are wired by pinTab via wireTabSend().
 ;(function wireDetailSend() {
   const ta = document.getElementById('detail-send-msg')
   if (!ta) return
-  ta.addEventListener('input', autosizeDetailSend)
+  const form = /** @type {HTMLFormElement | null} */ (document.getElementById('detail-send'))
+  ta.addEventListener('input', () => autosizeDetailSend(ta))
   ta.addEventListener('keydown', (e) => {
     // Enter inserts a newline (default textarea behavior); Ctrl+Enter or
     // Cmd+Enter sends. The Send button works on any device.
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
       e.preventDefault()
-      doDetailSend()
+      if (form) doDetailSend(form)
     }
   })
 
@@ -3380,6 +3395,78 @@ function pinTab(name) {
   const stack = document.getElementById('session-tab-stack')
   if (!stack) throw new Error('#session-tab-stack missing from DOM')
   stack.appendChild(contentEl)
+
+  // Wire the cloned send form — the template's onsubmit was dropped; we attach
+  // submit + Ctrl/Cmd+Enter listeners here so doDetailSend gets the right form.
+  const clonedForm = contentEl.querySelector('[data-orig-id="detail-send"]')
+  if (clonedForm instanceof HTMLFormElement) {
+    clonedForm.addEventListener('submit', (e) => {
+      e.preventDefault()
+      doDetailSend(clonedForm)
+    })
+    const clonedTa = /** @type {HTMLTextAreaElement | null} */ (
+      clonedForm.querySelector('[data-orig-id="detail-send-msg"]')
+    )
+    if (clonedTa) {
+      clonedTa.addEventListener('input', () => autosizeDetailSend(clonedTa))
+      clonedTa.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+          e.preventDefault()
+          doDetailSend(clonedForm)
+        }
+      })
+    }
+    const clonedAttachBtn = clonedForm.querySelector('[data-orig-id="detail-attach-btn"]')
+    const clonedAttachInput = /** @type {HTMLInputElement | null} */ (
+      clonedForm.querySelector('[data-orig-id="detail-attach-input"]')
+    )
+    if (clonedAttachBtn && clonedAttachInput) {
+      clonedAttachBtn.addEventListener('click', () => clonedAttachInput.click())
+      clonedAttachInput.addEventListener('change', () => {
+        if (clonedAttachInput.files && clonedAttachInput.files.length > 0)
+          addFiles(clonedAttachInput.files)
+        clonedAttachInput.value = ''
+      })
+    }
+    if (clonedTa) {
+      clonedTa.addEventListener('paste', (e) => {
+        const items = e.clipboardData?.items
+        if (!items) return
+        const files = []
+        for (const it of items)
+          if (it.kind === 'file') {
+            const f = it.getAsFile()
+            if (f) files.push(f)
+          }
+        if (files.length > 0) {
+          e.preventDefault()
+          addFiles(files)
+        }
+      })
+    }
+    let dropDepth = 0
+    clonedForm.addEventListener('dragenter', (e) => {
+      if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return
+      e.preventDefault()
+      dropDepth++
+      clonedForm.classList.add('drop-target')
+    })
+    clonedForm.addEventListener('dragover', (e) => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'))
+        e.preventDefault()
+    })
+    clonedForm.addEventListener('dragleave', () => {
+      dropDepth = Math.max(0, dropDepth - 1)
+      if (dropDepth === 0) clonedForm.classList.remove('drop-target')
+    })
+    clonedForm.addEventListener('drop', (e) => {
+      e.preventDefault()
+      dropDepth = 0
+      clonedForm.classList.remove('drop-target')
+      const files = e.dataTransfer?.files
+      if (files && files.length > 0) addFiles(files)
+    })
+  }
 
   // Strip button
   const stripTab = document.createElement('button')
@@ -3947,10 +4034,7 @@ connect()
  */
 async function renderHistorySidebar(sessionName, currentArchiveUuid, scope) {
   scope = scope || document
-  var el =
-    scope === document
-      ? document.getElementById('detail-history')
-      : /** @type {HTMLElement} */ (scope).querySelector('#detail-history')
+  var el = scopedById(scope, 'detail-history')
   if (!el) return
   el.replaceChildren()
   var res = await fetch('/api/archives?session=' + encodeURIComponent(sessionName))
