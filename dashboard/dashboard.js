@@ -1845,7 +1845,12 @@ function appendEnvelopeToStreamForTab(envelope, tab, root) {
   tab.streamKeys.add(key)
   appendEntryWithGrouping(root, entry)
   if (tab.name === focusedTabName) {
-    if (isNearBottom(root)) {
+    // Self-sent messages (typed into this dashboard's composer) always
+    // scroll to bottom — the user just took an explicit action and
+    // expects to see what they sent. Inbound from someone else only
+    // scrolls if the user was already near the bottom (don't fight a
+    // user who's scrolled up reading older history).
+    if (fromDashboardToSelf || isSent || isNearBottom(root)) {
       root.scrollTop = root.scrollHeight
       missedWhileScrolledUp = 0
     } else {
