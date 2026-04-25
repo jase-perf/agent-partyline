@@ -242,58 +242,38 @@ function pushRoute(state) {
 
 function applyRoute(state, opts) {
   opts = opts || {}
-  const sessionDetailTab = document.querySelector('button[data-view="session-detail"]')
-
-  if (state.view === 'session-detail') {
-    if (!state.sessionName) {
-      applyRoute({ view: 'switchboard' }, { skipPush: true })
-      return
+  if (state.view === 'session-detail' && state.sessionName) {
+    // Pin if not already in the strip; clear dismissal (URL beats dismissal).
+    if (dismissedTabs.has(state.sessionName)) {
+      dismissedTabs.delete(state.sessionName)
+      saveDismissed(dismissedTabs)
     }
-    const known =
-      Array.isArray(lastSessions) && lastSessions.some((s) => s.name === state.sessionName)
-    selectedSessionId = state.sessionName
-    selectedAgentId = state.agentId || null
-    selectedArchiveUuid = state.archiveUuid || null
-    notif.dispatchSessionViewed(state.sessionName)
-    if (sessionDetailTab) {
-      sessionDetailTab.disabled = false
+    if (!tabRegistry.has(state.sessionName)) {
+      // Tab doesn't exist yet — pin it. The tab will reflect online state
+      // when sessions-snapshot arrives (Task 9).
+      pinTab(state.sessionName)
     }
-    document.querySelectorAll('.tabs button').forEach((b) => b.classList.remove('active'))
-    if (sessionDetailTab) sessionDetailTab.classList.add('active')
-    renderView('session-detail')
-    if (!known && !sessionsReady) {
-      // Sessions list hasn't arrived yet — wait for /ws/observer's first
-      // sessions-snapshot before deciding the session is missing. Stash the
-      // route so we re-fire applyRoute once sessionsReady flips true.
-      pendingRouteState = state
-      return
+    const tab = tabRegistry.get(state.sessionName)
+    if (tab) {
+      tab.agentId = state.agentId || null
+      tab.archiveUuid = state.archiveUuid || null
     }
-    // Note: when !known && sessionsReady, we still call renderView →
-    // loadSessionDetailView. /api/session returns {session: null, ...} for
-    // unknown names, so the loader keeps spinning briefly and then settles
-    // on whatever the server has (often the session HAS come online by then).
-    // Showing a hard "session not found" message via setTimeout race against
-    // the in-flight fetch caused mid-load flicker on slow connections.
-  } else if (state.view === 'history') {
-    document.querySelectorAll('.tabs button').forEach((b) => b.classList.remove('active'))
-    const histTab = document.querySelector('button[data-view="history"]')
-    if (histTab) histTab.classList.add('active')
+    focusTab(state.sessionName, { pushHistory: !opts.skipPush })
+    return
+  }
+  if (state.view === 'history') {
     renderView('history')
     if (state.subtab) {
       const subBtn = document.querySelector(
         '#history-subtabs button[data-subtab="' + state.subtab + '"]',
       )
-      if (subBtn) subBtn.click()
+      if (subBtn instanceof HTMLElement) subBtn.click()
     }
-  } else {
-    // switchboard
-    document.querySelectorAll('.tabs button').forEach((b) => b.classList.remove('active'))
-    const swTab = document.querySelector('button[data-view="switchboard"]')
-    if (swTab) swTab.classList.add('active')
-    renderView('switchboard')
+    if (!opts.skipPush) pushRoute(state)
+    return
   }
-
-  if (!opts.skipPush) pushRoute(state)
+  // Default: switchboard
+  focusTab('', { pushHistory: !opts.skipPush })
 }
 
 function navigate(state) {
@@ -1533,7 +1513,7 @@ function buildSessionCard(s) {
 
   card.addEventListener('click', (e) => {
     if (e.target.closest('.notif-bell')) return
-    openSessionDetail(s.name)
+    openSessionFromSwitchboard(s.name)
   })
 
   return card
@@ -1933,6 +1913,21 @@ function prependTimelineEvent(event) {
 
 function openSessionDetail(sessionName) {
   navigate({ view: 'session-detail', sessionName, agentId: null })
+}
+
+/**
+ * Pin (idempotent), clear dismissal, and focus a session — the entry
+ * path used when the user clicks a session card on the Switchboard view.
+ *
+ * @param {string} name
+ */
+function openSessionFromSwitchboard(name) {
+  if (dismissedTabs.has(name)) {
+    dismissedTabs.delete(name)
+    saveDismissed(dismissedTabs)
+  }
+  pinTab(name)
+  focusTab(name, { pushHistory: true })
 }
 
 /**
@@ -3648,6 +3643,34 @@ function pickFocusAfterDismiss(dismissedName) {
   if (left) return /** @type {HTMLElement} */ (left).dataset.tabName || ''
   return ''
 }
+
+document.getElementById('tab-strip')?.addEventListener('click', (e) => {
+  const target = /** @type {HTMLElement} */ (e.target)
+  // Close X
+  if (target.classList.contains('tab-close')) {
+    e.stopPropagation()
+    const btn = target.closest('.tab-strip-tab')
+    const name = btn instanceof HTMLElement ? btn.dataset.tabName || '' : ''
+    if (name) dismissTab(name)
+    return
+  }
+  // Tab focus
+  const btn = target.closest('.tab-strip-tab')
+  if (btn instanceof HTMLElement) {
+    e.preventDefault()
+    const name = btn.dataset.tabName ?? ''
+    focusTab(name, { pushHistory: true })
+    return
+  }
+  // Overflow menu Machines / History (only History exists today)
+  const overflowBtn = target.closest('.tab-strip-overflow-menu button')
+  if (overflowBtn instanceof HTMLElement) {
+    const view = overflowBtn.dataset.view
+    if (view === 'history') navigate({ view: 'history' })
+    // Close the <details> after click
+    document.getElementById('tab-strip-overflow')?.removeAttribute('open')
+  }
+})
 
 // Apply the initial route from URL
 ensureSwitchboardTabRegistered()
