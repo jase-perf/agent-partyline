@@ -1173,6 +1173,59 @@ function updateQuota(q) {
   setPip('quota7dPip', 'quota7dPct', q.sevenDayUtilization, q.sevenDayReset, '7-day')
 }
 
+// Tap-to-show on the quota chips for mobile/touch — `title` only fires on
+// desktop hover. Toggle a floating popover positioned under the tapped chip
+// with the same text title would have shown. Tap elsewhere or the chip
+// again to dismiss; auto-hide after 4s.
+;(function wireQuotaPipTaps() {
+  let activePip = null
+  let hideTimer = null
+  function ensurePopover() {
+    let el = document.getElementById('quota-popover')
+    if (el) return el
+    el = document.createElement('div')
+    el.id = 'quota-popover'
+    el.className = 'quota-popover'
+    el.hidden = true
+    document.body.appendChild(el)
+    return el
+  }
+  function hide() {
+    const pop = document.getElementById('quota-popover')
+    if (pop) pop.hidden = true
+    activePip = null
+    if (hideTimer) {
+      clearTimeout(hideTimer)
+      hideTimer = null
+    }
+  }
+  document.addEventListener('click', (e) => {
+    const t = e.target instanceof Element ? e.target : null
+    const pip = t ? t.closest('.quota-pip') : null
+    if (!pip) {
+      // Tapped anywhere else — dismiss any open popover.
+      hide()
+      return
+    }
+    if (pip === activePip) {
+      hide()
+      return
+    }
+    const text = pip instanceof HTMLElement ? pip.title : ''
+    if (!text) return
+    const pop = ensurePopover()
+    pop.textContent = text
+    pop.hidden = false
+    const rect = pip.getBoundingClientRect()
+    // Position below + right-aligned to the pip; clamp into viewport.
+    pop.style.top = rect.bottom + 6 + 'px'
+    pop.style.left = Math.max(8, Math.min(rect.right - 220, window.innerWidth - 230)) + 'px'
+    activePip = pip
+    if (hideTimer) clearTimeout(hideTimer)
+    hideTimer = setTimeout(hide, 4000)
+  })
+})()
+
 // --- Sparkline ---
 
 // Cache: sessionId -> { buckets: number[], ts: number }
