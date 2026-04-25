@@ -392,6 +392,7 @@ const dashboardCssPath = join(__dirname, 'dashboard.css')
 const dashboardJsPath = join(__dirname, 'dashboard.js')
 const notificationsJsPath = join(__dirname, 'notifications.js')
 const transcriptGroupingJsPath = join(__dirname, 'transcript-grouping.js')
+const tabsStateJsPath = join(__dirname, 'tabs-state.js')
 
 // --- Server ---
 
@@ -1034,6 +1035,11 @@ const server = Bun.serve({
     }
     if (url.pathname === '/transcript-grouping.js') {
       return new Response(Bun.file(transcriptGroupingJsPath), {
+        headers: { 'Content-Type': 'application/javascript' },
+      })
+    }
+    if (url.pathname === '/tabs-state.js') {
+      return new Response(Bun.file(tabsStateJsPath), {
         headers: { 'Content-Type': 'application/javascript' },
       })
     }
