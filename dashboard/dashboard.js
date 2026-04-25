@@ -3768,6 +3768,27 @@ function dismissTab(name) {
 }
 
 /**
+ * Like dismissTab but does NOT add the session to the dismissal set —
+ * it just removes the tab from the strip + DOM. Used when the offline
+ * grace timer expires; the tab auto-pins again next time the session
+ * comes online.
+ *
+ * @param {string} name
+ */
+function unpinTabAfterOfflineEviction(name) {
+  if (name === '') return
+  const tab = tabRegistry.get(name)
+  if (!tab) return
+  if (tab.contentEl?.parentNode) tab.contentEl.parentNode.removeChild(tab.contentEl)
+  if (tab.stripTab?.parentNode) tab.stripTab.parentNode.removeChild(tab.stripTab)
+  tabRegistry.delete(name)
+  if (focusedTabName === name) {
+    const next = pickFocusAfterDismiss(name)
+    focusTab(next, { pushHistory: false })
+  }
+}
+
+/**
  * Reconcile the tab strip against the latest list of ccpl sessions.
  * Adds tabs for online + non-dismissed sessions that aren't yet pinned;
  * updates the state dot + offline class on every existing tab.
@@ -3850,20 +3871,35 @@ async function prefetchAllPinnedTabs() {
  * @param {boolean} online
  * @param {string | undefined} state
  */
+/**
+ * @param {Tab} tab
+ * @param {boolean} online
+ * @param {string | undefined} state
+ */
 function setTabOnlineState(tab, online, state) {
+  const wasOnline = tab.online
   tab.online = online
-  if (!tab.stripTab) return
-  const dot = tab.stripTab.querySelector('.state-dot')
-  if (dot instanceof HTMLElement) {
-    dot.classList.remove('idle', 'working', 'offline')
-    if (!online) dot.classList.add('offline')
-    else if (state === 'working') dot.classList.add('working')
-    else dot.classList.add('idle')
+  if (tab.stripTab) {
+    const dot = tab.stripTab.querySelector('.state-dot')
+    if (dot instanceof HTMLElement) {
+      dot.classList.remove('idle', 'working', 'offline')
+      if (!online) dot.classList.add('offline')
+      else if (state === 'working') dot.classList.add('working')
+      else dot.classList.add('idle')
+    }
+    tab.stripTab.classList.toggle('tab-offline', !online)
   }
-  if (online) {
-    tab.stripTab.classList.remove('tab-offline')
-  } else {
-    tab.stripTab.classList.add('tab-offline')
+  if (online && tab.evictionTimer) {
+    // Came back online within the grace window — cancel eviction.
+    clearTimeout(tab.evictionTimer)
+    tab.evictionTimer = null
+  } else if (!online && wasOnline && !tab.evictionTimer) {
+    // Just went offline — start the 5-min eviction timer.
+    tab.evictionTimer = setTimeout(() => {
+      tab.evictionTimer = null
+      // Only evict if still offline.
+      if (!tab.online) unpinTabAfterOfflineEviction(tab.name)
+    }, OFFLINE_GRACE_MS)
   }
 }
 
