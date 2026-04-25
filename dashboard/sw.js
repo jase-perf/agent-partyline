@@ -1,7 +1,7 @@
 // Party Line Dashboard Service Worker.
 // Caches the app shell, serves it offline, and handles notification clicks.
 
-const CACHE_NAME = 'party-line-shell-v4'
+const CACHE_NAME = 'party-line-shell-v5'
 
 const SHELL = [
   '/',
@@ -9,6 +9,8 @@ const SHELL = [
   '/dashboard.css',
   '/dashboard.js',
   '/notifications.js',
+  '/tabs-state.js',
+  '/transcript-grouping.js',
   '/manifest.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
