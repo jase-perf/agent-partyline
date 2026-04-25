@@ -62,6 +62,18 @@ describe('tabs-state', () => {
       saveDismissed(new Set())
       expect(loadDismissed()).toEqual(new Set())
     })
+
+    test('loadDismissed bails on payloads with more than 1000 entries (defensive cap)', () => {
+      const huge = Array.from({ length: 1001 }, (_, i) => 'name-' + i)
+      localStorage.setItem(KEY, JSON.stringify({ dismissed: huge }))
+      expect(loadDismissed()).toEqual(new Set())
+    })
+
+    test('loadDismissed accepts payloads at exactly the 1000-entry cap', () => {
+      const ok = Array.from({ length: 1000 }, (_, i) => 'name-' + i)
+      localStorage.setItem(KEY, JSON.stringify({ dismissed: ok }))
+      expect(loadDismissed().size).toBe(1000)
+    })
   })
 
   describe('pickLruEvictionVictim', () => {
@@ -96,6 +108,15 @@ describe('tabs-state', () => {
 
     test('TAB_DOM_LRU_CAP is the documented soft cap of 8', () => {
       expect(TAB_DOM_LRU_CAP).toBe(8)
+    })
+
+    test('returns null defensively when cap <= 0 (out-of-contract input)', () => {
+      const tabs = new Map([
+        ['a', { lastViewedAt: 100 }],
+        ['b', { lastViewedAt: 200 }],
+      ])
+      expect(pickLruEvictionVictim(tabs, 0)).toBeNull()
+      expect(pickLruEvictionVictim(tabs, -1)).toBeNull()
     })
   })
 

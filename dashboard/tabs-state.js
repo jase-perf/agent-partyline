@@ -51,6 +51,9 @@ export function loadDismissed() {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return new Set()
   const list = parsed.dismissed
   if (!Array.isArray(list)) return new Set()
+  // Bound the dismissal Set against a corrupt or adversarial payload —
+  // real-world dismissal counts are tens, never thousands.
+  if (list.length > 1000) return new Set()
   /** @type {Set<string>} */
   const out = new Set()
   for (const name of list) {
@@ -91,6 +94,7 @@ export function saveDismissed(dismissed) {
  * @returns {string | null}
  */
 export function pickLruEvictionVictim(tabs, cap) {
+  if (cap <= 0) return null
   if (tabs.size <= cap) return null
   /** @type {string | null} */
   let victim = null
