@@ -3057,8 +3057,8 @@ function autosizeDetailSend(ta) {
     }
   })
 
-  // Drag-and-drop onto the send form
-  const form = document.getElementById('detail-send')
+  // Drag-and-drop onto the send form (uses the `form` declared at the
+  // top of this IIFE).
   if (form) {
     let depth = 0
     const enter = (e) => {
