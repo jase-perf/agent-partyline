@@ -3871,11 +3871,6 @@ async function prefetchAllPinnedTabs() {
  * @param {boolean} online
  * @param {string | undefined} state
  */
-/**
- * @param {Tab} tab
- * @param {boolean} online
- * @param {string | undefined} state
- */
 function setTabOnlineState(tab, online, state) {
   const wasOnline = tab.online
   tab.online = online
