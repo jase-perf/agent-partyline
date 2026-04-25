@@ -1,5 +1,13 @@
 import { createNotifications } from './notifications.js'
 import {
+  loadDismissed,
+  saveDismissed,
+  pickLruEvictionVictim,
+  filterStripSessions,
+  shouldBumpUnread,
+  TAB_DOM_LRU_CAP,
+} from './tabs-state.js'
+import {
   groupSequentialToolCalls,
   summarizeToolGroup,
   shouldExtendToolRun,
@@ -76,6 +84,44 @@ let currentView = 'switchboard'
 let localMachineId = null
 let sessionMachines = {} // session name -> machine_id
 let sessionActiveSubagents = {} // session name -> count of active subagents
+
+// --- Tab registry ---
+
+/**
+ * @typedef {{
+ *   name: string,                // ccpl session name (key) — '' for Switchboard home tab
+ *   contentEl: HTMLElement | null, // mounted .session-tab-content clone, or null when evicted
+ *   stripTab: HTMLElement | null,  // the strip button DOM, or null when not in strip
+ *   streamKeys: Set<string>,
+ *   lastRenderedUuid: string | null,
+ *   scrollTop: number,
+ *   agentId: string | null,
+ *   archiveUuid: string | null,
+ *   subagents: unknown[],
+ *   lastViewedAt: number,
+ *   online: boolean,
+ *   evictionTimer: ReturnType<typeof setTimeout> | null,
+ * }} Tab
+ */
+
+/** @type {Map<string, Tab>} keyed by session name. The Switchboard home tab uses '' as its key. */
+const tabRegistry = new Map()
+
+/** @type {Set<string>} */
+let dismissedTabs = loadDismissed()
+
+/** Currently focused tab name (may be '' for Switchboard). */
+let focusedTabName = ''
+
+function currentTab() {
+  return tabRegistry.get(focusedTabName) || null
+}
+
+/** 5 minutes — how long an offline session stays in the strip before eviction. */
+const OFFLINE_GRACE_MS = 5 * 60 * 1000
+
+/** Maximum parallel prefetch fetches at dashboard load. */
+const PREFETCH_PARALLELISM = 4
 
 // --- localStorage UI state helpers ---
 
@@ -2094,6 +2140,7 @@ function renderAgentTree(scope) {
     scope === document
       ? document.getElementById('detail-tree')
       : /** @type {HTMLElement} */ (scope).querySelector('#detail-tree')
+  if (!ul) return
   ul.replaceChildren()
 
   // 'main' row — always visible at top
@@ -3266,7 +3313,257 @@ const notif = createNotifications({
   fetch: window.fetch.bind(window),
 })
 
+// --- Tab lifecycle ---
+
+/**
+ * Insert the Switchboard home tab into the registry. The home tab has no
+ * cloned content — it points at the existing static .view[data-view="switchboard"]
+ * element. Idempotent.
+ */
+function ensureSwitchboardTabRegistered() {
+  if (tabRegistry.has('')) return
+  const stripTab = document.getElementById('tab-strip-switchboard')
+  /** @type {Tab} */
+  const home = {
+    name: '',
+    contentEl: null, // home doesn't clone — it shows the existing switchboard view
+    stripTab,
+    streamKeys: new Set(),
+    lastRenderedUuid: null,
+    scrollTop: 0,
+    agentId: null,
+    archiveUuid: null,
+    subagents: [],
+    lastViewedAt: Date.now(),
+    online: true,
+    evictionTimer: null,
+  }
+  tabRegistry.set('', home)
+  focusedTabName = ''
+}
+
+/**
+ * Add a session tab to the registry + insert a strip button + clone the
+ * session-tab-content template into the stack. Idempotent — if the tab
+ * already exists, this is a no-op (returns the existing record).
+ *
+ * Caller is responsible for clearing the dismissal flag if appropriate.
+ *
+ * TODO: click handlers inside renderAgentTree / buildAgentLi still hit
+ * document.getElementById('detail-sidebar') at event time. They will need
+ * scoping when per-tab clones land (Task 11).
+ *
+ * @param {string} name
+ * @returns {Tab}
+ */
+function pinTab(name) {
+  const existing = tabRegistry.get(name)
+  if (existing) return existing
+
+  // Clone the content template
+  const template = document.querySelector('.session-tab-content[data-tab-content-template]')
+  if (!template) throw new Error('session-tab-content template missing from DOM')
+  const contentEl = /** @type {HTMLElement} */ (template.cloneNode(true))
+  contentEl.removeAttribute('hidden')
+  contentEl.removeAttribute('data-tab-content-template')
+  contentEl.dataset.tabName = name
+
+  // Strip away the original IDs inside the clone — they would collide
+  // with the template's hidden copy. Stash them in data-orig-id for
+  // refactored code that wants to look them up via per-tab querySelector.
+  for (const el of contentEl.querySelectorAll('[id]')) {
+    const oldId = el.id
+    el.removeAttribute('id')
+    el.setAttribute('data-orig-id', oldId)
+  }
+
+  const stack = document.getElementById('session-tab-stack')
+  if (!stack) throw new Error('#session-tab-stack missing from DOM')
+  stack.appendChild(contentEl)
+
+  // Strip button
+  const stripTab = document.createElement('button')
+  stripTab.type = 'button'
+  stripTab.className = 'tab-strip-tab'
+  stripTab.dataset.tabName = name
+  const dot = document.createElement('span')
+  dot.className = 'state-dot offline'
+  const label = document.createElement('span')
+  label.className = 'tab-strip-label'
+  label.textContent = name
+  const pill = document.createElement('span')
+  pill.className = 'unread-pill'
+  pill.hidden = true
+  const close = document.createElement('button')
+  close.type = 'button'
+  close.className = 'tab-close'
+  close.textContent = '×'
+  close.setAttribute('aria-label', 'Close ' + name)
+  stripTab.append(dot, label, pill, close)
+
+  document.getElementById('tab-strip-sessions')?.appendChild(stripTab)
+
+  /** @type {Tab} */
+  const tab = {
+    name,
+    contentEl,
+    stripTab,
+    streamKeys: new Set(),
+    lastRenderedUuid: null,
+    scrollTop: 0,
+    agentId: null,
+    archiveUuid: null,
+    subagents: [],
+    lastViewedAt: 0, // 0 = never focused, won't be picked by LRU
+    online: false,
+    evictionTimer: null,
+  }
+  tabRegistry.set(name, tab)
+  return tab
+}
+
+/**
+ * Make `name` the active tab. Hides all other tab content (and the legacy
+ * static views), updates aria-current on strip buttons, sets lastViewedAt,
+ * resets the unread count, and triggers a content-load if the tab is empty.
+ *
+ * @param {string} name '' for Switchboard, otherwise a session name
+ * @param {{ pushHistory?: boolean }} [opts]
+ */
+function focusTab(name, opts) {
+  opts = opts || {}
+  const tab = tabRegistry.get(name)
+  if (!tab) {
+    console.warn('focusTab called with unknown name', name)
+    return
+  }
+
+  // Mark every strip button non-current
+  for (const btn of document.querySelectorAll('.tab-strip-tab')) {
+    btn.removeAttribute('aria-current')
+  }
+  if (tab.stripTab) tab.stripTab.setAttribute('aria-current', 'page')
+
+  // Hide all per-tab content clones; activate this one (or none, for home).
+  for (const c of document.querySelectorAll('.session-tab-stack > .session-tab-content')) {
+    c.removeAttribute('data-active')
+  }
+  if (tab.contentEl) tab.contentEl.setAttribute('data-active', 'true')
+
+  // Show only the right legacy .view[data-view] section.
+  for (const v of document.querySelectorAll('section.view[data-view]')) {
+    v.removeAttribute('hidden')
+    v.classList.remove('active')
+  }
+  if (name === '') {
+    // Show switchboard view (legacy static)
+    const sw = document.querySelector('section.view[data-view="switchboard"]')
+    if (sw) sw.classList.add('active')
+    for (const v of document.querySelectorAll('section.view[data-view]')) {
+      if (v !== sw) v.setAttribute('hidden', '')
+    }
+  } else {
+    // Show the session-detail wrapping section — the per-tab clone inside
+    // #session-tab-stack is what the user sees, but the wrapping section
+    // is the only [data-view] we mark active so existing CSS keeps working.
+    const sd = document.querySelector('section.view[data-view="session-detail"]')
+    if (sd) sd.classList.add('active')
+    for (const v of document.querySelectorAll('section.view[data-view]')) {
+      if (v !== sd) v.setAttribute('hidden', '')
+    }
+  }
+
+  focusedTabName = name
+  tab.lastViewedAt = Date.now()
+  unreadCounts[name] = 0
+  refreshUnreadPill(tab)
+
+  // URL update
+  const url = name === '' ? '/' : '/session/' + encodeURIComponent(name)
+  if (opts.pushHistory) {
+    history.pushState({ tab: name }, '', url)
+  } else {
+    history.replaceState({ tab: name }, '', url)
+  }
+
+  // Lazy load the content if not already populated for this tab
+  if (name !== '' && tab.contentEl && !tab.contentEl.dataset.loaded) {
+    tab.contentEl.dataset.loaded = 'true'
+    void loadSessionDetailView({
+      sessionKey: name,
+      agentId: tab.agentId,
+      archiveUuid: tab.archiveUuid,
+      contentRoot: tab.contentEl,
+    })
+  }
+}
+
+/**
+ * @param {Tab} tab
+ */
+function refreshUnreadPill(tab) {
+  if (!tab.stripTab) return
+  const pill = tab.stripTab.querySelector('.unread-pill')
+  if (!(pill instanceof HTMLElement)) return
+  const count = unreadCounts[tab.name] || 0
+  if (count > 0) {
+    pill.hidden = false
+    pill.textContent = String(count)
+  } else {
+    pill.hidden = true
+    pill.textContent = ''
+  }
+}
+
+/**
+ * Remove a session tab's strip entry + DOM, and add it to the dismissal
+ * set so it doesn't auto-re-pin the next time it appears in
+ * sessions-snapshot. The Switchboard tab cannot be dismissed.
+ *
+ * @param {string} name
+ */
+function dismissTab(name) {
+  if (name === '') return
+  const tab = tabRegistry.get(name)
+  if (!tab) return
+  // Stop any pending offline-eviction timer
+  if (tab.evictionTimer) {
+    clearTimeout(tab.evictionTimer)
+    tab.evictionTimer = null
+  }
+  if (tab.contentEl && tab.contentEl.parentNode) tab.contentEl.parentNode.removeChild(tab.contentEl)
+  if (tab.stripTab && tab.stripTab.parentNode) tab.stripTab.parentNode.removeChild(tab.stripTab)
+  tabRegistry.delete(name)
+  dismissedTabs.add(name)
+  saveDismissed(dismissedTabs)
+  // Move focus to the next tab on the right, or Switchboard if none
+  if (focusedTabName === name) {
+    const next = pickFocusAfterDismiss(name)
+    focusTab(next, { pushHistory: false })
+  }
+}
+
+/**
+ * @param {string} dismissedName
+ * @returns {string}
+ */
+function pickFocusAfterDismiss(dismissedName) {
+  // Prefer the strip tab to the right of the one being dismissed; fall
+  // back to the one to its left; finally fall back to Switchboard ('').
+  const buttons = Array.from(document.querySelectorAll('#tab-strip-sessions .tab-strip-tab'))
+  const idx = buttons.findIndex(
+    (b) => /** @type {HTMLElement} */ (b).dataset.tabName === dismissedName,
+  )
+  if (idx === -1) return ''
+  const right = buttons[idx + 1]
+  if (right) return /** @type {HTMLElement} */ (right).dataset.tabName || ''
+  const left = buttons[idx - 1]
+  if (left) return /** @type {HTMLElement} */ (left).dataset.tabName || ''
+  return ''
+}
+
 // Apply the initial route from URL
+ensureSwitchboardTabRegistered()
 applyRoute(parseUrl(), { skipPush: true })
 
 // --- Mobile keyboard handling ---
