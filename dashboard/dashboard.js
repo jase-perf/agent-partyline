@@ -160,8 +160,12 @@ let seededOnce = false
 
 function bumpUnread(sessionKey) {
   if (!sessionKey) return
+  // Don't bump for the currently-focused tab — focusing already cleared it.
+  if (sessionKey === focusedTabName) return
   unreadCounts[sessionKey] = (unreadCounts[sessionKey] || 0) + 1
   updateSessions(lastSessions)
+  const tab = tabRegistry.get(sessionKey)
+  if (tab) refreshUnreadPill(tab)
 }
 
 function resolveNameFromJsonlPath(path) {
@@ -449,7 +453,7 @@ function connect() {
       if (
         data.data &&
         data.data.session_name &&
-        (data.data.hook_event === 'Stop' || data.data.hook_event === 'Notification')
+        shouldBumpUnread({ kind: 'hook-event', hookEvent: data.data.hook_event })
       ) {
         bumpUnread(data.data.session_name)
       }
@@ -991,6 +995,7 @@ function handleSessionsSnapshot(sessions) {
   sessions.forEach(function (s) {
     sessionRevisions.set(s.name, s.revision)
   })
+  syncStripFromSessions(sessions)
   updateSessions(adapted)
 }
 
@@ -1030,6 +1035,16 @@ function applySessionDelta(delta) {
   if ('context_tokens' in c) status.contextTokens = c.context_tokens
 
   updateOverviewGrid(lastSessions)
+  const liveRow = lastSessions.find((s) => s.name === delta.session)
+  if (liveRow) {
+    // Derive the strip-compatible shape from the adapted lastSessions row.
+    // online = any state except 'ended'; state comes from metadata.status.state.
+    const stripSessions = lastSessions.map((s) => {
+      const st = s.metadata && s.metadata.status && s.metadata.status.state
+      return { name: s.name, online: st !== 'ended', state: st || undefined }
+    })
+    syncStripFromSessions(stripSessions)
+  }
   if (currentView === 'session-detail' && selectedSessionId === delta.session) {
     try {
       if (typeof renderDetailHeader === 'function') renderDetailHeader(row)
@@ -1649,7 +1664,7 @@ function handleUserPromptLive(data, rootOverride) {
 // the same way we treat a Stop.
 function handleApiError(data) {
   if (!data || !data.session_name) return
-  bumpUnread(data.session_name)
+  if (shouldBumpUnread({ kind: 'api-error' })) bumpUnread(data.session_name)
   try {
     notif.onApiError(data)
   } catch (err) {
@@ -3622,6 +3637,51 @@ function dismissTab(name) {
   if (focusedTabName === name) {
     const next = pickFocusAfterDismiss(name)
     focusTab(next, { pushHistory: false })
+  }
+}
+
+/**
+ * Reconcile the tab strip against the latest list of ccpl sessions.
+ * Adds tabs for online + non-dismissed sessions that aren't yet pinned;
+ * updates the state dot + offline class on every existing tab.
+ * Does NOT remove offline tabs immediately — that's the 5-min eviction
+ * timer's job (Task 12).
+ *
+ * @param {Array<{ name: string, online: boolean, state?: string }>} sessions
+ */
+function syncStripFromSessions(sessions) {
+  const visible = filterStripSessions(sessions, dismissedTabs)
+  for (const s of visible) {
+    if (!tabRegistry.has(s.name)) {
+      pinTab(s.name)
+    }
+  }
+  for (const s of sessions) {
+    const tab = tabRegistry.get(s.name)
+    if (!tab) continue
+    setTabOnlineState(tab, s.online, s.state)
+  }
+}
+
+/**
+ * @param {Tab} tab
+ * @param {boolean} online
+ * @param {string | undefined} state
+ */
+function setTabOnlineState(tab, online, state) {
+  tab.online = online
+  if (!tab.stripTab) return
+  const dot = tab.stripTab.querySelector('.state-dot')
+  if (dot instanceof HTMLElement) {
+    dot.classList.remove('idle', 'working', 'offline')
+    if (!online) dot.classList.add('offline')
+    else if (state === 'working') dot.classList.add('working')
+    else dot.classList.add('idle')
+  }
+  if (online) {
+    tab.stripTab.classList.remove('tab-offline')
+  } else {
+    tab.stripTab.classList.add('tab-offline')
   }
 }
 
