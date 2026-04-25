@@ -307,15 +307,10 @@ function renderView(view) {
   }
 }
 
-document.getElementById('tabs').addEventListener('click', function (e) {
-  var btn = e.target.closest('button[data-view]')
-  if (!btn || btn.disabled) return
-  const view = btn.dataset.view
-  if (view === 'switchboard') navigate({ view: 'switchboard' })
-  else if (view === 'history') navigate({ view: 'history' })
-  else if (view === 'session-detail' && selectedSessionId)
-    navigate({ view: 'session-detail', sessionName: selectedSessionId, agentId: selectedAgentId })
-})
+// Legacy #tabs click handler removed — Task 3 replaced .tabs with the
+// .tab-strip nav, and Task 8's strip click delegation handles tab focus,
+// X close, and overflow menu navigation. Calling getElementById('tabs')
+// after Task 3 returned null and the .addEventListener threw on init.
 
 function esc(s) {
   const el = document.createElement('span')
