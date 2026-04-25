@@ -2751,3 +2751,192 @@ section[data-view='switchboard'] .switchboard-wrap {
   opacity: 0.4;
   pointer-events: none;
 }
+
+/* ----------------------------------------------------------------------
+ * Multi-tab session strip
+ * Replaces the legacy four-button .tabs row. Switchboard is sticky-left
+ * (always reachable on mobile), per-session tabs sit in a horizontally
+ * scrollable middle, and Machines / History live behind a ⋯ overflow.
+ * ---------------------------------------------------------------------- */
+.tab-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0;
+  flex: 0 0 auto;
+}
+.tab-strip-tab {
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 8px 14px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  position: relative;
+  /* Make X close affordance comfortable on touch without changing desktop */
+  min-height: 36px;
+}
+.tab-strip-tab[aria-current='page'] {
+  background: var(--bg);
+  color: var(--text);
+  border-bottom: 2px solid var(--accent);
+}
+.tab-strip-tab:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.02);
+}
+.tab-strip-home {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+.tab-strip-home[aria-current='page'] {
+  background: var(--bg);
+}
+.tab-strip-sessions {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Hide scrollbar visually but keep interactivity (mobile especially). */
+  scrollbar-width: none;
+}
+.tab-strip-sessions::-webkit-scrollbar {
+  display: none;
+}
+.tab-strip-tab .state-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--text-dim);
+  flex: 0 0 auto;
+}
+.tab-strip-tab .state-dot.idle {
+  background: var(--green);
+}
+.tab-strip-tab .state-dot.working {
+  background: var(--yellow);
+}
+.tab-strip-tab .state-dot.offline {
+  background: var(--text-dim);
+}
+.tab-strip-tab.tab-offline {
+  opacity: 0.55;
+}
+.tab-strip-tab .unread-pill {
+  display: inline-block;
+  background: var(--accent);
+  color: #0d1117;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 8px;
+  padding: 0 6px;
+  line-height: 16px;
+  min-width: 16px;
+  text-align: center;
+  flex: 0 0 auto;
+}
+.tab-strip-tab .unread-pill[hidden] {
+  display: none;
+}
+.tab-strip-tab .tab-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  margin-left: 2px;
+  cursor: pointer;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+.tab-strip-tab .tab-close:hover {
+  color: var(--red);
+  background: rgba(248, 81, 73, 0.1);
+}
+.tab-strip-overflow {
+  flex: 0 0 auto;
+  position: relative;
+  border-left: 1px solid var(--border);
+}
+.tab-strip-overflow > summary {
+  list-style: none;
+  cursor: pointer;
+  color: var(--text-dim);
+  padding: 8px 14px;
+  font-size: 16px;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+}
+.tab-strip-overflow > summary::-webkit-details-marker {
+  display: none;
+}
+.tab-strip-overflow[open] > summary {
+  background: var(--bg);
+  color: var(--text);
+}
+.tab-strip-overflow-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  z-index: 50;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+.tab-strip-overflow-menu button {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+}
+.tab-strip-overflow-menu button:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* The session-tab-content cloning template stays hidden — runtime
+ * clones drop the [hidden] / [data-tab-content-template] attributes. */
+.session-tab-content[data-tab-content-template] {
+  display: none;
+}
+/* Per-tab content stack — exactly one child has [data-active] at a time. */
+.session-tab-stack {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.session-tab-stack > .session-tab-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: none;
+}
+.session-tab-stack > .session-tab-content[data-active] {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
