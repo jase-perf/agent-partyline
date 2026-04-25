@@ -2398,10 +2398,26 @@ function isNearBottom(el) {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 40
 }
 
+/**
+ * Resolve the focused tab's stream + scroll-to-bottom button. Returns
+ * null when no per-tab clone is active (e.g., Switchboard view) or when
+ * lookups fail. Per-tab scope; the legacy single-tab path is gone.
+ *
+ * @returns {{ btn: HTMLElement, stream: HTMLElement } | null}
+ */
+function focusedTabScrollEls() {
+  const tab = tabRegistry.get(focusedTabName)
+  if (!tab || !tab.contentEl) return null
+  const btn = scopedById(tab.contentEl, 'scroll-to-bottom')
+  const stream = scopedById(tab.contentEl, 'detail-stream')
+  if (!(btn instanceof HTMLElement) || !(stream instanceof HTMLElement)) return null
+  return { btn, stream }
+}
+
 function updateScrollToBottomButton(newlyMissed) {
-  const btn = document.getElementById('scroll-to-bottom')
-  const stream = document.getElementById('detail-stream')
-  if (!btn || !stream) return
+  const els = focusedTabScrollEls()
+  if (!els) return
+  const { btn, stream } = els
   const near = isNearBottom(stream)
   if (near) {
     missedWhileScrolledUp = 0
@@ -2412,18 +2428,6 @@ function updateScrollToBottomButton(newlyMissed) {
   btn.hidden = false
   btn.textContent = missedWhileScrolledUp > 0 ? '↓ ' + missedWhileScrolledUp + ' new' : '↓ Latest'
 }
-
-;(function wireScrollToBottom() {
-  const btn = document.getElementById('scroll-to-bottom')
-  const stream = document.getElementById('detail-stream')
-  if (!btn || !stream) return
-  btn.addEventListener('click', () => {
-    stream.scrollTop = stream.scrollHeight
-    missedWhileScrolledUp = 0
-    btn.hidden = true
-  })
-  stream.addEventListener('scroll', () => updateScrollToBottomButton(0))
-})()
 
 /**
  * @param {{
@@ -3597,6 +3601,20 @@ function wireTabFormHandlers(contentEl) {
     const files = e.dataTransfer?.files
     if (files && files.length > 0) addFiles(files)
   })
+
+  // Scroll-to-bottom button + stream-scroll listener — per-tab clone
+  // owns its own pair, so wire here rather than at module init (the
+  // template's hidden copy gets the global listeners but they never fire).
+  const clonedStream = scopedById(contentEl, 'detail-stream')
+  const clonedScrollBtn = scopedById(contentEl, 'scroll-to-bottom')
+  if (clonedStream instanceof HTMLElement && clonedScrollBtn instanceof HTMLElement) {
+    clonedScrollBtn.addEventListener('click', () => {
+      clonedStream.scrollTop = clonedStream.scrollHeight
+      missedWhileScrolledUp = 0
+      clonedScrollBtn.hidden = true
+    })
+    clonedStream.addEventListener('scroll', () => updateScrollToBottomButton(0))
+  }
 }
 
 /**
