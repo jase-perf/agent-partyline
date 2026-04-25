@@ -3495,6 +3495,84 @@ function ensureSwitchboardTabRegistered() {
 }
 
 /**
+ * Wire submit + keyboard + file-picker + drag-and-drop handlers on the
+ * send form inside a cloned .session-tab-content element. Called by
+ * pinTab (initial mount) and the LRU re-mount path in focusTab.
+ *
+ * @param {HTMLElement} contentEl
+ */
+function wireTabFormHandlers(contentEl) {
+  const clonedForm = contentEl.querySelector('[data-orig-id="detail-send"]')
+  if (!(clonedForm instanceof HTMLFormElement)) return
+  clonedForm.addEventListener('submit', (e) => {
+    e.preventDefault()
+    doDetailSend(clonedForm)
+  })
+  const clonedTa = /** @type {HTMLTextAreaElement | null} */ (
+    clonedForm.querySelector('[data-orig-id="detail-send-msg"]')
+  )
+  if (clonedTa) {
+    clonedTa.addEventListener('input', () => autosizeDetailSend(clonedTa))
+    clonedTa.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+        e.preventDefault()
+        doDetailSend(clonedForm)
+      }
+    })
+  }
+  const clonedAttachBtn = clonedForm.querySelector('[data-orig-id="detail-attach-btn"]')
+  const clonedAttachInput = /** @type {HTMLInputElement | null} */ (
+    clonedForm.querySelector('[data-orig-id="detail-attach-input"]')
+  )
+  if (clonedAttachBtn && clonedAttachInput) {
+    clonedAttachBtn.addEventListener('click', () => clonedAttachInput.click())
+    clonedAttachInput.addEventListener('change', () => {
+      if (clonedAttachInput.files && clonedAttachInput.files.length > 0)
+        addFiles(clonedAttachInput.files)
+      clonedAttachInput.value = ''
+    })
+  }
+  if (clonedTa) {
+    clonedTa.addEventListener('paste', (e) => {
+      const items = e.clipboardData?.items
+      if (!items) return
+      const files = []
+      for (const it of items)
+        if (it.kind === 'file') {
+          const f = it.getAsFile()
+          if (f) files.push(f)
+        }
+      if (files.length > 0) {
+        e.preventDefault()
+        addFiles(files)
+      }
+    })
+  }
+  let dropDepth = 0
+  clonedForm.addEventListener('dragenter', (e) => {
+    if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return
+    e.preventDefault()
+    dropDepth++
+    clonedForm.classList.add('drop-target')
+  })
+  clonedForm.addEventListener('dragover', (e) => {
+    if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'))
+      e.preventDefault()
+  })
+  clonedForm.addEventListener('dragleave', () => {
+    dropDepth = Math.max(0, dropDepth - 1)
+    if (dropDepth === 0) clonedForm.classList.remove('drop-target')
+  })
+  clonedForm.addEventListener('drop', (e) => {
+    e.preventDefault()
+    dropDepth = 0
+    clonedForm.classList.remove('drop-target')
+    const files = e.dataTransfer?.files
+    if (files && files.length > 0) addFiles(files)
+  })
+}
+
+/**
  * Add a session tab to the registry + insert a strip button + clone the
  * session-tab-content template into the stack. Idempotent — if the tab
  * already exists, this is a no-op (returns the existing record).
@@ -3533,77 +3611,8 @@ function pinTab(name) {
   if (!stack) throw new Error('#session-tab-stack missing from DOM')
   stack.appendChild(contentEl)
 
-  // Wire the cloned send form — the template's onsubmit was dropped; we attach
-  // submit + Ctrl/Cmd+Enter listeners here so doDetailSend gets the right form.
-  const clonedForm = contentEl.querySelector('[data-orig-id="detail-send"]')
-  if (clonedForm instanceof HTMLFormElement) {
-    clonedForm.addEventListener('submit', (e) => {
-      e.preventDefault()
-      doDetailSend(clonedForm)
-    })
-    const clonedTa = /** @type {HTMLTextAreaElement | null} */ (
-      clonedForm.querySelector('[data-orig-id="detail-send-msg"]')
-    )
-    if (clonedTa) {
-      clonedTa.addEventListener('input', () => autosizeDetailSend(clonedTa))
-      clonedTa.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
-          e.preventDefault()
-          doDetailSend(clonedForm)
-        }
-      })
-    }
-    const clonedAttachBtn = clonedForm.querySelector('[data-orig-id="detail-attach-btn"]')
-    const clonedAttachInput = /** @type {HTMLInputElement | null} */ (
-      clonedForm.querySelector('[data-orig-id="detail-attach-input"]')
-    )
-    if (clonedAttachBtn && clonedAttachInput) {
-      clonedAttachBtn.addEventListener('click', () => clonedAttachInput.click())
-      clonedAttachInput.addEventListener('change', () => {
-        if (clonedAttachInput.files && clonedAttachInput.files.length > 0)
-          addFiles(clonedAttachInput.files)
-        clonedAttachInput.value = ''
-      })
-    }
-    if (clonedTa) {
-      clonedTa.addEventListener('paste', (e) => {
-        const items = e.clipboardData?.items
-        if (!items) return
-        const files = []
-        for (const it of items)
-          if (it.kind === 'file') {
-            const f = it.getAsFile()
-            if (f) files.push(f)
-          }
-        if (files.length > 0) {
-          e.preventDefault()
-          addFiles(files)
-        }
-      })
-    }
-    let dropDepth = 0
-    clonedForm.addEventListener('dragenter', (e) => {
-      if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return
-      e.preventDefault()
-      dropDepth++
-      clonedForm.classList.add('drop-target')
-    })
-    clonedForm.addEventListener('dragover', (e) => {
-      if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'))
-        e.preventDefault()
-    })
-    clonedForm.addEventListener('dragleave', () => {
-      dropDepth = Math.max(0, dropDepth - 1)
-      if (dropDepth === 0) clonedForm.classList.remove('drop-target')
-    })
-    clonedForm.addEventListener('drop', (e) => {
-      e.preventDefault()
-      dropDepth = 0
-      clonedForm.classList.remove('drop-target')
-      const files = e.dataTransfer?.files
-      if (files && files.length > 0) addFiles(files)
-    })
-  }
+  // Wire submit + keyboard + file + drag handlers on the cloned send form.
+  wireTabFormHandlers(contentEl)
 
   // Strip button
   const stripTab = document.createElement('button')
@@ -3660,6 +3669,28 @@ function focusTab(name, opts) {
   if (!tab) {
     console.warn('focusTab called with unknown name', name)
     return
+  }
+
+  // If this tab was evicted by the LRU sweep (DOM destroyed), re-mount the
+  // template clone before showing it. Mirrors pinTab's clone-and-strip-ids
+  // logic. wireTabFormHandlers re-attaches submit/keyboard/file/drag handlers
+  // so the composer works immediately after re-focus.
+  if (name !== '' && tab.contentEl === null) {
+    const template = document.querySelector('.session-tab-content[data-tab-content-template]')
+    if (template) {
+      const cloned = /** @type {HTMLElement} */ (template.cloneNode(true))
+      cloned.removeAttribute('hidden')
+      cloned.removeAttribute('data-tab-content-template')
+      cloned.dataset.tabName = name
+      for (const el of cloned.querySelectorAll('[id]')) {
+        const oldId = el.id
+        el.removeAttribute('id')
+        el.setAttribute('data-orig-id', oldId)
+      }
+      document.getElementById('session-tab-stack')?.appendChild(cloned)
+      wireTabFormHandlers(cloned)
+      tab.contentEl = cloned
+    }
   }
 
   // Mark every strip button non-current
@@ -3720,6 +3751,12 @@ function focusTab(name, opts) {
       contentRoot: tab.contentEl,
     })
   }
+
+  // LRU sweep: if the registry has grown past the cap, evict the
+  // least-recently-focused tab's DOM (keep its strip entry). Re-focusing
+  // later will trigger a fresh loadSessionDetailView via the re-mount
+  // branch above.
+  maybeEvictByLru()
 }
 
 /**
@@ -3786,6 +3823,33 @@ function unpinTabAfterOfflineEviction(name) {
     const next = pickFocusAfterDismiss(name)
     focusTab(next, { pushHistory: false })
   }
+}
+
+/**
+ * Soft-evict the LRU tab's DOM, keeping its strip entry intact.
+ * Called after every focusTab to enforce TAB_DOM_LRU_CAP.
+ * The evicted tab's contentEl is set to null; re-focusing it later
+ * triggers a fresh clone + loadSessionDetailView in focusTab.
+ */
+function maybeEvictByLru() {
+  /** @type {Map<string, { lastViewedAt: number }>} */
+  const candidates = new Map()
+  for (const [name, tab] of tabRegistry) {
+    if (name === '') continue // never evict Switchboard
+    if (!tab.contentEl) continue // already evicted
+    candidates.set(name, { lastViewedAt: tab.lastViewedAt })
+  }
+  const victim = pickLruEvictionVictim(candidates, TAB_DOM_LRU_CAP)
+  if (!victim) return
+  const t = tabRegistry.get(victim)
+  if (!t || !t.contentEl) return
+  if (t.contentEl.parentNode) t.contentEl.parentNode.removeChild(t.contentEl)
+  t.contentEl = null
+  t.streamKeys = new Set()
+  t.lastRenderedUuid = null
+  t.subagents = []
+  // Strip entry stays (greyed if offline, normal otherwise). Clicking it
+  // re-creates the content via pinTab + lazy-load (see focusTab).
 }
 
 /**
@@ -3944,6 +4008,43 @@ document.getElementById('tab-strip')?.addEventListener('click', (e) => {
     document.getElementById('tab-strip-overflow')?.removeAttribute('open')
   }
 })
+
+// --- Tab keyboard navigation ---
+// Alt+Left / Alt+Right: navigate between tabs. Intercepted in capture phase
+// so it fires even when a textarea has focus, overriding macOS word-jump
+// (as specified). Switches use replaceState so back/forward doesn't walk
+// every individual Alt+Right one-by-one.
+// Esc: focus Switchboard, unless focus is inside the composer send area.
+window.addEventListener(
+  'keydown',
+  (e) => {
+    if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      e.preventDefault()
+      e.stopPropagation()
+      const buttons = Array.from(document.querySelectorAll('#tab-strip .tab-strip-tab'))
+      if (buttons.length === 0) return
+      const idx = buttons.findIndex(
+        (b) => /** @type {HTMLElement} */ (b).getAttribute('aria-current') === 'page',
+      )
+      const dir = e.key === 'ArrowRight' ? 1 : -1
+      const len = buttons.length
+      const nextIdx = ((idx === -1 ? 0 : idx) + dir + len) % len
+      const nextBtn = /** @type {HTMLElement} */ (buttons[nextIdx])
+      const name = nextBtn.dataset.tabName ?? ''
+      focusTab(name, { pushHistory: false }) // replaceState per spec
+      return
+    }
+    if (e.key === 'Escape') {
+      // Don't fight a textarea / overflow menu / open <details>; only
+      // intercept if focus is NOT inside the composer send area.
+      const t = /** @type {HTMLElement} */ (e.target)
+      if (t && t.closest && t.closest('.detail-send')) return
+      e.preventDefault()
+      focusTab('', { pushHistory: false })
+    }
+  },
+  true, // capture phase — beat in-component handlers
+)
 
 // Apply the initial route from URL
 ensureSwitchboardTabRegistered()
