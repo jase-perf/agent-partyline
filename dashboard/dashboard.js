@@ -364,7 +364,6 @@ function connect() {
       }
       addMessage(adapted)
       addMessageToBus(adapted)
-      if (adapted.to && adapted.to !== 'all') bumpUnread(adapted.to)
       try {
         notif.onPartyLineMessage(adapted)
       } catch (err) {
@@ -414,16 +413,17 @@ function connect() {
     } else if (data.type === 'hook-event') {
       handleHookEvent(data.data)
       maybeHandleCompactForCurrentView(data.data)
-      // Unread counter: ONLY bump on events that represent a real
-      // "something you should look at" moment — session finished turn (Stop),
-      // Notification hook (model asked for input), or session-end. Tool
-      // calls, user prompts, subagent spawns, etc. don't count.
+      // Unread counter: only bump for events that represent the agent
+      // needing the user — finished a turn (Stop) or asking for input /
+      // permission (Notification). Lifecycle (SessionEnd), per-tool events,
+      // and inter-agent party-line envelopes deliberately do NOT count;
+      // they were noisy enough to drown the badge under multi-agent
+      // traffic. See shouldBumpUnread() in tabs-state.js for the
+      // authoritative classifier.
       if (
         data.data &&
         data.data.session_name &&
-        (data.data.hook_event === 'Stop' ||
-          data.data.hook_event === 'Notification' ||
-          data.data.hook_event === 'SessionEnd')
+        (data.data.hook_event === 'Stop' || data.data.hook_event === 'Notification')
       ) {
         bumpUnread(data.data.session_name)
       }
