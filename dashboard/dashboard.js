@@ -1711,12 +1711,14 @@ function handleUserPromptLive(data, rootOverride) {
     tab.streamKeys.add(entry.uuid)
     const root = rootOverride || scopedById(tab.contentEl, 'detail-stream')
     if (!(root instanceof HTMLElement)) continue
+    // Capture BEFORE the append — see appendEnvelopeToStreamForTab.
+    const wasNearBottom = isNearBottom(root)
     appendEntryWithGrouping(root, entry)
     if (tab.name !== focusedTabName) {
       // Background tabs follow the tail unconditionally.
       root.scrollTop = root.scrollHeight
-    } else if (isNearBottom(root)) {
-      // Focused tab: only auto-scroll if user isn't actively scrolled up.
+    } else if (wasNearBottom) {
+      // Focused tab: only auto-scroll if user wasn't actively scrolled up.
       root.scrollTop = root.scrollHeight
     } else {
       updateScrollToBottomButton(1)
@@ -1900,6 +1902,10 @@ function appendEnvelopeToStreamForTab(envelope, tab, root) {
       attachments: envelope.attachments,
     }
   }
+  // Capture scroll state BEFORE the append — appending grows scrollHeight
+  // so an after-append isNearBottom check would think the user just
+  // scrolled up by the height of the new entry.
+  const wasNearBottom = isNearBottom(root)
   tab.streamKeys.add(key)
   appendEntryWithGrouping(root, entry)
   if (tab.name !== focusedTabName) {
@@ -1907,9 +1913,10 @@ function appendEnvelopeToStreamForTab(envelope, tab, root) {
     // back, the latest is what they see. The "scrolled up reading"
     // pause is a focused-tab-only concern.
     root.scrollTop = root.scrollHeight
-  } else if (fromDashboardToSelf || isSent || isNearBottom(root)) {
-    // Focused tab: scroll if self-sent OR user is already near bottom.
-    // Don't fight a user who's actively scrolled up reading history.
+  } else if (fromDashboardToSelf || isSent || wasNearBottom) {
+    // Focused tab: scroll if self-sent OR user was already near bottom
+    // before this entry landed. Don't fight a user who's actively
+    // scrolled up reading history.
     root.scrollTop = root.scrollHeight
     missedWhileScrolledUp = 0
   } else {
@@ -3105,7 +3112,12 @@ function closeLightbox() {
 let pendingAttachments = []
 
 function renderAttachChips() {
-  const wrap = document.getElementById('detail-attach-chips')
+  // Scope to the focused tab's clone — the global #detail-attach-chips
+  // lives in the hidden template and isn't visible to the user.
+  const tab = tabRegistry.get(focusedTabName)
+  const wrap =
+    (tab && tab.contentEl && scopedById(tab.contentEl, 'detail-attach-chips')) ||
+    document.getElementById('detail-attach-chips')
   if (!wrap) return
   wrap.replaceChildren()
   if (pendingAttachments.length === 0) {
