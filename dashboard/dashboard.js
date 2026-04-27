@@ -3501,52 +3501,6 @@ document.getElementById('detail-drawer-toggle').addEventListener('click', () => 
   document.getElementById('detail-sidebar').classList.toggle('open')
 })
 
-document.getElementById('detail-stream').addEventListener('click', (e) => {
-  const btn = e.target.closest('.copy-btn')
-  if (btn) {
-    const src = btn.dataset.src
-    if (src)
-      navigator.clipboard.writeText(src).then(() => {
-        btn.textContent = 'copied'
-        setTimeout(() => {
-          btn.textContent = 'copy raw'
-        }, 1200)
-      })
-    return
-  }
-  const codeBtn = e.target.closest('.code-copy-btn')
-  if (codeBtn) {
-    const pre = codeBtn.parentElement.querySelector('pre')
-    if (pre)
-      navigator.clipboard.writeText(pre.textContent || '').then(() => {
-        codeBtn.textContent = 'copied'
-        setTimeout(() => {
-          codeBtn.textContent = 'copy'
-        }, 1200)
-      })
-    return
-  }
-
-  // Spawn marker: summary toggle (native <details>); only the explicit
-  // "View this agent" button navigates to the subagent.
-  const viewAgentBtn = e.target.closest('.view-agent')
-  if (viewAgentBtn && viewAgentBtn.dataset.agentId) {
-    e.preventDefault()
-    navigate({
-      view: 'session-detail',
-      sessionName: focusedTabName,
-      agentId: viewAgentBtn.dataset.agentId,
-    })
-    return
-  }
-
-  const pl = e.target.closest('.pl-entry')
-  if (pl && pl.dataset.otherSession) {
-    navigate({ view: 'session-detail', sessionName: pl.dataset.otherSession, agentId: null })
-    return
-  }
-})
-
 window.addEventListener('popstate', (e) => {
   const state = e.state && typeof e.state === 'object' ? e.state : parseUrl()
   applyRoute(state, { skipPush: true })
@@ -3701,6 +3655,52 @@ function wireTabFormHandlers(contentEl) {
       clonedScrollBtn.hidden = true
     })
     clonedStream.addEventListener('scroll', () => updateScrollToBottomButton(0))
+  }
+
+  if (clonedStream) {
+    clonedStream.addEventListener('click', (e) => {
+      const target = /** @type {HTMLElement} */ (e.target)
+      const btn = target.closest('.copy-btn')
+      if (btn) {
+        const src = btn.dataset.src
+        if (src)
+          navigator.clipboard.writeText(src).then(() => {
+            btn.textContent = 'copied'
+            setTimeout(() => {
+              btn.textContent = 'copy raw'
+            }, 1200)
+          })
+        return
+      }
+      const codeBtn = target.closest('.code-copy-btn')
+      if (codeBtn) {
+        const pre = codeBtn.parentElement.querySelector('pre')
+        if (pre)
+          navigator.clipboard.writeText(pre.textContent || '').then(() => {
+            codeBtn.textContent = 'copied'
+            setTimeout(() => {
+              codeBtn.textContent = 'copy'
+            }, 1200)
+          })
+        return
+      }
+      const viewAgentBtn = target.closest('.view-agent')
+      if (viewAgentBtn && viewAgentBtn.dataset.agentId) {
+        e.preventDefault()
+        const tabName = contentEl.dataset.tabName || focusedTabName
+        navigate({
+          view: 'session-detail',
+          sessionName: tabName,
+          agentId: viewAgentBtn.dataset.agentId,
+        })
+        return
+      }
+      const pl = target.closest('.pl-entry')
+      if (pl && pl.dataset.otherSession) {
+        navigate({ view: 'session-detail', sessionName: pl.dataset.otherSession, agentId: null })
+        return
+      }
+    })
   }
 }
 
