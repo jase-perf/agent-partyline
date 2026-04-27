@@ -73,7 +73,7 @@ document.addEventListener('focusin', (e) => {
   if (!target.closest('.detail-send')) return
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      const stream = document.getElementById('detail-stream')
+      const stream = focusedStream()
       if (stream) stream.scrollTop = stream.scrollHeight
     })
   })
@@ -116,6 +116,17 @@ let focusedTabName = ''
 
 function currentTab() {
   return tabRegistry.get(focusedTabName) || null
+}
+
+/**
+ * Stream element of the currently focused session tab, or null on Switchboard / no clone.
+ * @returns {HTMLElement | null}
+ */
+function focusedStream() {
+  const tab = currentTab()
+  if (!tab || tab.name === '' || !tab.contentEl) return null
+  const el = scopedById(tab.contentEl, 'detail-stream')
+  return el instanceof HTMLElement ? el : null
 }
 
 /** 5 minutes — how long an offline session stays in the strip before eviction. */
@@ -4227,7 +4238,7 @@ if (window.visualViewport) {
   const vv = window.visualViewport
   function updateViewportHeight() {
     // Record stream scroll bottom-distance before the resize changes heights.
-    const stream = document.getElementById('detail-stream')
+    const stream = focusedStream()
     const bottomDist = stream ? stream.scrollHeight - stream.scrollTop - stream.clientHeight : null
     document.body.style.height = vv.height + 'px'
     // Restore relative bottom-anchor after reflow.
@@ -4702,13 +4713,15 @@ function attachHistoryTooltip(li, uuid) {
 // send composer so the user can't try to message into a frozen archive.
 var __archiveBackHandler = null
 function setArchiveMode(sessionName, archiveUuid) {
-  var banner = document.getElementById('archive-banner')
-  var sendBar = document.querySelector('.detail-send')
+  var tab = tabRegistry.get(sessionName)
+  if (!tab || !tab.contentEl) return
+  var banner = scopedById(tab.contentEl, 'archive-banner')
+  var sendBar = tab.contentEl.querySelector('.detail-send')
   if (archiveUuid) {
     if (banner) banner.hidden = false
-    var txt = document.getElementById('archive-banner-text')
+    var txt = scopedById(tab.contentEl, 'archive-banner-text')
     if (txt) txt.textContent = 'Viewing archive · uuid ' + archiveUuid.slice(0, 8) + '…'
-    var back = document.getElementById('archive-back-link')
+    var back = scopedById(tab.contentEl, 'archive-back-link')
     if (back) {
       // Remove any prior handler so we don't accumulate listeners across navigations.
       if (__archiveBackHandler) back.removeEventListener('click', __archiveBackHandler)
