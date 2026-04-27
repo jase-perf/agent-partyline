@@ -78,7 +78,12 @@ export function createWsClient(opts: WsClientOpts): WsClient {
   function scheduleReconnect(): void {
     if (stopped) return
     if (reconnectTimer) clearTimeout(reconnectTimer)
-    reconnectTimer = setTimeout(connect, reconnectDelay)
+    // Jitter ±30% to avoid synchronized reconnect storms when N clients
+    // disconnect at the same moment (server restart). Math.random() returns
+    // [0, 1), so (random - 0.5) gives [-0.5, 0.5); * 0.6 gives [-0.3, 0.3).
+    const jitter = (Math.random() - 0.5) * 0.6
+    const delayWithJitter = Math.max(0, Math.round(reconnectDelay * (1 + jitter)))
+    reconnectTimer = setTimeout(connect, delayWithJitter)
     reconnectDelay = Math.min(reconnectDelay * 2, opts.reconnectMaxMs ?? 30_000)
   }
 
