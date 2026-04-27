@@ -592,7 +592,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'party_line_history',
-      description: 'View recent messages on the party line (excludes heartbeats).',
+      description: 'View recent messages on the party line.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -891,8 +891,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case 'party_line_history': {
       const limit = Number(args?.limit) || 20
-      const filtered = messageHistory.filter((m) => m.type !== 'heartbeat')
-      const recent = filtered.slice(-limit)
+      const recent = messageHistory.slice(-limit)
       if (recent.length === 0) {
         return { content: [{ type: 'text', text: 'No recent messages.' }] }
       }
