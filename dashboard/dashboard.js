@@ -200,9 +200,7 @@ fetch('/api/self')
   })
   .catch(() => {})
 let selectedAgentId = null
-let selectedArchiveUuid = null
 let currentSessionSubagents = []
-var historyBuffer = []
 
 // --- URL Router ---
 
@@ -856,7 +854,6 @@ function handleSessionRemoved(name) {
       const card = ev.target.closest('.session-card')
       if (!card) return
       const t = ev.touches[0]
-      pressCard = card
       pressStart = { x: t.clientX, y: t.clientY }
       pressTimer = setTimeout(() => {
         const name = card.dataset.sessionId
@@ -1823,61 +1820,8 @@ function maybeHandleCompactForCurrentView(evPayload) {
   renderStream({ force: true })
 }
 
-// Append a single party-line envelope directly to the stream without a
-// full /api/transcript fetch. Used for instant self-loopback feedback.
 /**
- * @param {object} envelope
- * @param {HTMLElement | null} [rootOverride]
- */
-function appendEnvelopeToStream(envelope, rootOverride) {
-  if (!envelope || !focusedTabName) return
-  // Skip protocol-level chatter — users never want to see these in a session view.
-  if (envelope.type === 'heartbeat' || envelope.type === 'announce') return
-  const root = rootOverride || document.getElementById('detail-stream')
-  if (!root) return
-  const key = envelope.id
-  if (renderedEntryKeys.has(key)) return
-  const isSent = envelope.from === focusedTabName
-  // When the user sends a message from the dashboard's session-detail send box,
-  // the envelope comes back as from="dashboard" → viewed session. Render it as
-  // a "you:" user entry so it matches how it'll look after a refresh (the
-  // recipient's JSONL records the incoming channel message as a user turn).
-  const fromDashboardToSelf = envelope.from === 'dashboard' && envelope.to === focusedTabName
-  let entry
-  if (fromDashboardToSelf) {
-    entry = {
-      uuid: envelope.id,
-      ts: envelope.ts,
-      type: 'user',
-      text: envelope.body,
-      attachments: envelope.attachments,
-    }
-  } else {
-    entry = {
-      uuid: envelope.id,
-      ts: envelope.ts,
-      type: isSent ? 'party-line-send' : 'party-line-receive',
-      envelope_id: envelope.id,
-      other_session: isSent ? envelope.to : envelope.from,
-      body: envelope.body,
-      callback_id: envelope.callback_id || undefined,
-      envelope_type: envelope.type,
-      attachments: envelope.attachments,
-    }
-  }
-  const wasNear = isNearBottom(root)
-  renderedEntryKeys.add(key)
-  appendEntryWithGrouping(root, entry)
-  if (wasNear) {
-    root.scrollTop = root.scrollHeight
-    missedWhileScrolledUp = 0
-  } else {
-    updateScrollToBottomButton(1)
-  }
-}
-
-/**
- * Per-tab variant of appendEnvelopeToStream. Uses the tab's own streamKeys
+ * Per-tab variant for envelope live-injection. Uses the tab's own streamKeys
  * for dedup (not the global renderedEntryKeys) so background tabs stay live
  * without disturbing the focused tab's dedup state.
  *
@@ -2183,7 +2127,7 @@ async function loadSessionDetailView(opts) {
   const sessionKey = opts.sessionKey ?? focusedTabName
   if (!sessionKey) return
   const agentId = opts.agentId ?? selectedAgentId
-  const archiveUuid = opts.archiveUuid ?? selectedArchiveUuid
+  const archiveUuid = opts.archiveUuid ?? null
   /** @type {Document | HTMLElement} */
   const root = opts.contentRoot || document
 
@@ -2533,7 +2477,7 @@ async function renderStream(opts) {
   if (!root) return
   const sessionKey = opts.sessionKey ?? focusedTabName
   const agentId = opts.agentId ?? selectedAgentId
-  const archiveUuid = opts.archiveUuid ?? selectedArchiveUuid
+  const archiveUuid = opts.archiveUuid ?? null
   if (!sessionKey) {
     root.replaceChildren()
     return
@@ -2741,7 +2685,7 @@ function updateToolGroupSummary(summary, count, entries) {
  * Append one transcript entry to `root`, folding sequential tool-use entries
  * into a `.tool-group` wrapper. Derives the current run state from the DOM tail
  * so it works identically for full-rebuild and incremental-append paths, and
- * for live-injection paths (handleUserPromptLive / appendEnvelopeToStream).
+ * for live-injection paths (handleUserPromptLive / appendEnvelopeToStreamForTab).
  */
 function appendEntryWithGrouping(root, e) {
   if (e.type !== 'tool-use') {
