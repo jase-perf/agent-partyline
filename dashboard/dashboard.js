@@ -404,12 +404,19 @@ function connect() {
           appendEnvelopeToStreamForTab(adapted, tab, streamRoot)
       }
     } else if (data.type === 'permission-request') {
+      const payload = data.data || data
       try {
-        notif.onPermissionRequest(data.data || data)
+        notif.onPermissionRequest(payload)
       } catch (err) {
         console.error('[notifications] onPermissionRequest threw', err)
       }
-      renderPermissionCard(data.data || data)
+      for (const tab of tabRegistry.values()) {
+        if (tab.name === '') continue
+        if (!tab.contentEl) continue
+        if (tab.name !== payload.session) continue
+        const streamRoot = scopedById(tab.contentEl, 'detail-stream')
+        if (streamRoot instanceof HTMLElement) renderPermissionCard(payload, streamRoot)
+      }
     } else if (data.type === 'permission-resolved') {
       try {
         notif.onPermissionResolved(data.data || data)
@@ -4344,15 +4351,13 @@ document.getElementById('detail-bell')?.addEventListener('click', (ev) => {
 
 // --- Permission request cards ---
 
-function renderPermissionCard(data) {
-  if (!focusedTabName) return
-  const stream = document.getElementById('detail-stream')
-  if (!stream) return
+function renderPermissionCard(data, streamRoot) {
+  if (!streamRoot) return
 
-  const existing = document.querySelector(
+  const existing = streamRoot.querySelector(
     `.perm-card[data-request-id="${CSS.escape(data.request_id)}"]`,
   )
-  if (existing) return // idempotent
+  if (existing) return // idempotent (per stream)
 
   const card = document.createElement('div')
   card.className = 'perm-card perm-card-pending'
@@ -4407,9 +4412,9 @@ function renderPermissionCard(data) {
   allowBtn.addEventListener('click', () => respondToPermission(data, 'allow', card))
   denyBtn.addEventListener('click', () => respondToPermission(data, 'deny', card))
 
-  const wasNear = isNearBottom(stream)
-  stream.appendChild(card)
-  if (wasNear) stream.scrollTop = stream.scrollHeight
+  const wasNear = isNearBottom(streamRoot)
+  streamRoot.appendChild(card)
+  if (wasNear) streamRoot.scrollTop = streamRoot.scrollHeight
 }
 
 async function respondToPermission(data, behavior, card) {
@@ -4438,19 +4443,21 @@ async function respondToPermission(data, behavior, card) {
 }
 
 function updatePermissionCardResolved(data) {
-  const card = document.querySelector(
+  const cards = document.querySelectorAll(
     `.perm-card[data-request-id="${CSS.escape(data.request_id)}"]`,
   )
-  if (!card) return
-  card.classList.remove('perm-card-pending')
-  card.classList.add('perm-card-resolved')
-  const actions = card.querySelector('.perm-card-actions')
-  if (actions) {
-    actions.replaceChildren()
-    const status = document.createElement('span')
-    status.className = 'perm-card-status perm-card-status-' + data.behavior
-    status.textContent = data.behavior === 'allow' ? '✅ Allowed' : '❌ Denied'
-    actions.appendChild(status)
+  if (cards.length === 0) return
+  for (const card of cards) {
+    card.classList.remove('perm-card-pending')
+    card.classList.add('perm-card-resolved')
+    const actions = card.querySelector('.perm-card-actions')
+    if (actions) {
+      actions.replaceChildren()
+      const status = document.createElement('span')
+      status.className = 'perm-card-status perm-card-status-' + data.behavior
+      status.textContent = data.behavior === 'allow' ? '✅ Allowed' : '❌ Denied'
+      actions.appendChild(status)
+    }
   }
 }
 
