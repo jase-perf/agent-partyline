@@ -4212,7 +4212,7 @@ if (window.visualViewport) {
 function updateBanner() {
   const banner = document.getElementById('notif-banner')
   if (!banner) return
-  const text = banner.querySelector('.notif-banner-text')
+  const text = document.getElementById('notif-banner-text')
   const btn = document.getElementById('notif-banner-btn')
   if (!text || !btn) return
 
