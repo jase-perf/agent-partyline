@@ -27,15 +27,23 @@ export class JsonlObserver {
   private timer: ReturnType<typeof setInterval> | null = null
   private readonly pollIntervalMs: number
   private scanCount = 0
+  private scanning = false
 
-  constructor(private root: string, pollIntervalMs = 500) {
+  constructor(
+    private root: string,
+    pollIntervalMs = 500,
+  ) {
     this.pollIntervalMs = pollIntervalMs
   }
 
-  on(l: Listener): void { this.listeners.push(l) }
+  on(l: Listener): void {
+    this.listeners.push(l)
+  }
 
   /** Register a callback fired when a file is detected to have shrunk (truncation/replacement). */
-  onReset(l: ResetListener): void { this.resetListeners.push(l) }
+  onReset(l: ResetListener): void {
+    this.resetListeners.push(l)
+  }
 
   async start(): Promise<void> {
     this.running = true
@@ -45,37 +53,45 @@ export class JsonlObserver {
 
   private scan(): void {
     if (!this.running) return
-    if (!existsSync(this.root)) return
+    if (this.scanning) return
+    this.scanning = true
     try {
-      for (const cwdDir of readdirSync(this.root, { withFileTypes: true })) {
-        if (!cwdDir.isDirectory()) continue
-        const cwdPath = join(this.root, cwdDir.name)
-        for (const entry of readdirSync(cwdPath, { withFileTypes: true })) {
-          if (entry.isFile() && entry.name.endsWith('.jsonl')) {
-            this.poll(join(cwdPath, entry.name))
-          } else if (entry.isDirectory()) {
-            const subagentsDir = join(cwdPath, entry.name, 'subagents')
-            if (existsSync(subagentsDir)) {
-              for (const sub of readdirSync(subagentsDir, { withFileTypes: true })) {
-                if (sub.isFile() && sub.name.endsWith('.jsonl')) {
-                  this.poll(join(subagentsDir, sub.name))
+      if (!existsSync(this.root)) return
+      try {
+        for (const cwdDir of readdirSync(this.root, { withFileTypes: true })) {
+          if (!cwdDir.isDirectory()) continue
+          const cwdPath = join(this.root, cwdDir.name)
+          for (const entry of readdirSync(cwdPath, { withFileTypes: true })) {
+            if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+              this.poll(join(cwdPath, entry.name))
+            } else if (entry.isDirectory()) {
+              const subagentsDir = join(cwdPath, entry.name, 'subagents')
+              if (existsSync(subagentsDir)) {
+                for (const sub of readdirSync(subagentsDir, { withFileTypes: true })) {
+                  if (sub.isFile() && sub.name.endsWith('.jsonl')) {
+                    this.poll(join(subagentsDir, sub.name))
+                  }
                 }
               }
             }
           }
         }
+      } catch {
+        /* root read failed — next tick retries */
       }
-    } catch { /* root read failed — next tick retries */ }
 
-    // Periodic GC: drop offset + fingerprint entries for files that no longer exist.
-    this.scanCount++
-    if (this.scanCount % 20 === 0) {
-      for (const path of this.offsets.keys()) {
-        if (!existsSync(path)) {
-          this.offsets.delete(path)
-          this.fingerprints.delete(path)
+      // Periodic GC: drop offset + fingerprint entries for files that no longer exist.
+      this.scanCount++
+      if (this.scanCount % 20 === 0) {
+        for (const path of this.offsets.keys()) {
+          if (!existsSync(path)) {
+            this.offsets.delete(path)
+            this.fingerprints.delete(path)
+          }
         }
       }
+    } finally {
+      this.scanning = false
     }
   }
 
@@ -98,13 +114,21 @@ export class JsonlObserver {
   private poll(path: string): void {
     if (!this.running) return
     let size: number
-    try { size = statSync(path).size } catch { return }
+    try {
+      size = statSync(path).size
+    } catch {
+      return
+    }
     const prev = this.offsets.get(path)
     if (prev === undefined) {
       // First sighting — seed offset to current size; don't replay existing content.
       // Also capture a fingerprint so we can detect future file replacement.
       let fd: number
-      try { fd = openSync(path, 'r') } catch { return }
+      try {
+        fd = openSync(path, 'r')
+      } catch {
+        return
+      }
       try {
         const fp = this.readFingerprint(fd, size)
         if (fp) this.fingerprints.set(path, fp)
@@ -119,7 +143,11 @@ export class JsonlObserver {
       // File shrank — could be compaction (file replaced) or in-place truncation.
       // Open the file and compare fingerprint to determine what happened.
       let fd: number
-      try { fd = openSync(path, 'r') } catch { return }
+      try {
+        fd = openSync(path, 'r')
+      } catch {
+        return
+      }
       try {
         const newFp = this.readFingerprint(fd, size)
         const oldFp = this.fingerprints.get(path) ?? ''
@@ -151,7 +179,9 @@ export class JsonlObserver {
     let fd: number
     try {
       fd = openSync(path, 'r')
-    } catch { return }
+    } catch {
+      return
+    }
     try {
       const length = size - prev
       const buf = Buffer.alloc(length)
@@ -168,12 +198,17 @@ export class JsonlObserver {
       try {
         const entry = JSON.parse(line) as Record<string, unknown>
         for (const l of this.listeners) l({ session_id, file_path: path, entry })
-      } catch { /* malformed — ignore */ }
+      } catch {
+        /* malformed — ignore */
+      }
     }
   }
 
   stop(): void {
     this.running = false
-    if (this.timer) { clearInterval(this.timer); this.timer = null }
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = null
+    }
   }
 }
