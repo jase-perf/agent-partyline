@@ -691,7 +691,12 @@ const server = Bun.serve({
     // REST API: set context override for a session
     if (url.pathname === '/api/overrides' && req.method === 'POST') {
       return (async () => {
-        const body = (await req.json()) as { session?: string; contextLimit?: number }
+        let body: { session?: string; contextLimit?: number }
+        try {
+          body = (await req.json()) as { session?: string; contextLimit?: number }
+        } catch {
+          return Response.json({ error: 'invalid_json' }, { status: 400 })
+        }
         if (!body.session || !body.contextLimit) {
           return Response.json({ error: '"session" and "contextLimit" required' }, { status: 400 })
         }
@@ -706,7 +711,12 @@ const server = Bun.serve({
     // REST API: delete context override for a session
     if (url.pathname === '/api/overrides' && req.method === 'DELETE') {
       return (async () => {
-        const body = (await req.json()) as { session?: string }
+        let body: { session?: string }
+        try {
+          body = (await req.json()) as { session?: string }
+        } catch {
+          return Response.json({ error: 'invalid_json' }, { status: 400 })
+        }
         if (!body.session) {
           return Response.json({ error: '"session" required' }, { status: 400 })
         }
@@ -794,11 +804,21 @@ const server = Bun.serve({
     // REST API: send message — route through the switchboard.
     if (url.pathname === '/api/send' && req.method === 'POST') {
       return (async () => {
-        const body = (await req.json()) as {
+        let body: {
           to?: string
           message?: string
           type?: string
           attachment_ids?: string[]
+        }
+        try {
+          body = (await req.json()) as {
+            to?: string
+            message?: string
+            type?: string
+            attachment_ids?: string[]
+          }
+        } catch {
+          return Response.json({ error: 'invalid_json' }, { status: 400 })
         }
         if (!body.to) {
           return Response.json({ error: '"to" required' }, { status: 400 })
