@@ -4,7 +4,6 @@ import { openDb } from '../src/storage/db'
 import {
   registerSession,
   getSessionByName,
-  getSessionByToken,
   findSessionByTokenSafe,
   listSessions,
   updateSessionOnConnect,
@@ -47,14 +46,6 @@ describe('ccpl-queries', () => {
     cleanup()
   })
 
-  test('getSessionByToken resolves by token', () => {
-    const row = registerSession(db, 'foo', '/tmp')
-    const byToken = getSessionByToken(db, row.token)
-    expect(byToken?.name).toBe('foo')
-    expect(getSessionByToken(db, 'not-a-real-token')).toBeNull()
-    cleanup()
-  })
-
   test('updateSessionOnConnect bumps revision + marks online', () => {
     registerSession(db, 'foo', '/tmp')
     updateSessionOnConnect(db, 'foo', 'uuid-1', 1234, 'mach-a')
@@ -94,8 +85,8 @@ describe('ccpl-queries', () => {
     const a = registerSession(db, 'foo', '/tmp')
     const newToken = rotateToken(db, 'foo')
     expect(newToken).not.toBe(a.token)
-    expect(getSessionByToken(db, a.token)).toBeNull()
-    expect(getSessionByToken(db, newToken)?.name).toBe('foo')
+    expect(findSessionByTokenSafe(db, a.token)).toBeNull()
+    expect(findSessionByTokenSafe(db, newToken)?.name).toBe('foo')
     cleanup()
   })
 
