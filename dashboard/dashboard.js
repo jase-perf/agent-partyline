@@ -794,7 +794,7 @@ function handleSessionRemoved(name) {
   }
 
   // If currently viewing this session's detail, bounce back to switchboard.
-  if (focusedTabName === name) {
+  if (currentView === 'session-detail' && focusedTabName === name) {
     navigate({ view: 'switchboard' })
   }
 }
@@ -1045,7 +1045,7 @@ function applySessionDelta(delta) {
     })
     syncStripFromSessions(stripSessions)
   }
-  if (focusedTabName === delta.session) {
+  if (currentView === 'session-detail' && focusedTabName === delta.session) {
     try {
       if (typeof renderDetailHeader === 'function') renderDetailHeader(row)
     } catch (err) {
@@ -1667,7 +1667,7 @@ function handleSessionUpdate(session) {
   }
 
   // Live-patch the session detail view when the viewed session receives an update
-  if (session && session.name === focusedTabName) {
+  if (currentView === 'session-detail' && session && session.name === focusedTabName) {
     renderDetailHeader(session)
     fetch('/api/session?id=' + encodeURIComponent(focusedTabName))
       .then((r) => r.json())
