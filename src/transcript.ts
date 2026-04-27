@@ -5,7 +5,7 @@
  * merges tool_use + tool_result pairs, and emits typed TranscriptEntry records.
  */
 
-import { readFileSync, readdirSync } from 'fs'
+import { existsSync, readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 
@@ -219,11 +219,8 @@ function findCwdSlug(projectsRoot: string, sessionId: string): string | null {
   }
 
   for (const slug of slugs) {
-    try {
-      readFileSync(join(projectsRoot, slug, `${sessionId}.jsonl`))
+    if (existsSync(join(projectsRoot, slug, `${sessionId}.jsonl`))) {
       return slug
-    } catch {
-      // not in this slug
     }
   }
 
