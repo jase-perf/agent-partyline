@@ -153,14 +153,18 @@ async function cmdLaunch(name: string): Promise<void> {
     die(`Cannot chdir to ${row.cwd}: ${String(err)}`)
   }
 
-  // Rename the current tmux window to the session name. TMUX env var may be
-  // stripped by sudo/su, so also treat TERM=tmux* as evidence we're running
-  // inside tmux. The spawn is fire-and-forget; errors (no tmux, not inside a
-  // session) are swallowed.
-  const insideTmux = !!process.env.TMUX || (process.env.TERM ?? '').startsWith('tmux')
-  if (insideTmux) {
+  // Rename the current tmux window to the session name. Gate strictly on
+  // TMUX (the socket path) AND TMUX_PANE — both are set together by tmux
+  // and both get cleared by `sudo -i` / `su -`. The previous TERM=tmux*
+  // fallback fired after sudo across users, sending the rename to whatever
+  // tmux server matched the new UID's socket and clobbering an unrelated
+  // pane. Targeting -t $TMUX_PANE makes the rename address-explicit so it
+  // can never hit the wrong server even if TMUX leaks through.
+  if (process.env.TMUX && process.env.TMUX_PANE) {
     try {
-      spawn('tmux', ['rename-window', name], { stdio: 'ignore' }).unref()
+      spawn('tmux', ['rename-window', '-t', process.env.TMUX_PANE, name], {
+        stdio: 'ignore',
+      }).unref()
     } catch {
       /* ignore */
     }
