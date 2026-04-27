@@ -199,7 +199,6 @@ fetch('/api/self')
     localMachineId = data.machine_id
   })
   .catch(() => {})
-let selectedAgentId = null
 let currentSessionSubagents = []
 
 // --- URL Router ---
@@ -1768,7 +1767,7 @@ function handleJsonlEvent(update) {
     if (tab.name === focusedTabName) {
       // Focused tab: use the existing global renderStream path so its
       // incremental cursor (lastRenderedUuid, renderedEntryKeys) stays correct.
-      const agentMatches = selectedAgentId && sessionId === selectedAgentId
+      const agentMatches = tab.agentId && sessionId === tab.agentId
       if (sessionName === focusedTabName || sessionId === focusedTabName || agentMatches) {
         renderStream({ incremental: true })
       }
@@ -2126,7 +2125,7 @@ async function loadSessionDetailView(opts) {
   opts = opts || {}
   const sessionKey = opts.sessionKey ?? focusedTabName
   if (!sessionKey) return
-  const agentId = opts.agentId ?? selectedAgentId
+  const agentId = opts.agentId ?? tabRegistry.get(focusedTabName)?.agentId ?? null
   const archiveUuid = opts.archiveUuid ?? null
   /** @type {Document | HTMLElement} */
   const root = opts.contentRoot || document
@@ -2333,12 +2332,12 @@ function renderAgentTree(scope) {
   ul.replaceChildren()
 
   // 'main' row — always visible at top
+  const currentAgentId = tabRegistry.get(focusedTabName)?.agentId ?? null
   const mainLi = document.createElement('li')
   mainLi.dataset.agentId = ''
   mainLi.textContent = '▸ main'
-  if (!selectedAgentId) mainLi.classList.add('active')
+  if (!currentAgentId) mainLi.classList.add('active')
   mainLi.addEventListener('click', () => {
-    selectedAgentId = null
     navigate({ view: 'session-detail', sessionName: focusedTabName, agentId: null })
     const sidebar = document.getElementById('detail-sidebar')
     if (sidebar) sidebar.classList.remove('open')
@@ -2370,7 +2369,7 @@ function renderAgentTree(scope) {
     groupLi.style.paddingLeft = '0'
     const details = document.createElement('details')
     // Auto-open when the selected subagent is inside the completed group
-    if (selectedAgentId && completed.some((sa) => sa.agent_id === selectedAgentId)) {
+    if (currentAgentId && completed.some((sa) => sa.agent_id === currentAgentId)) {
       details.open = true
     }
     const summary = document.createElement('summary')
@@ -2402,10 +2401,9 @@ function buildAgentLi(sa) {
   dot.className = 'dot ' + status
   li.appendChild(labelNode)
   li.appendChild(dot)
-  if (selectedAgentId === sa.agent_id) li.classList.add('active')
+  if ((tabRegistry.get(focusedTabName)?.agentId ?? null) === sa.agent_id) li.classList.add('active')
   li.addEventListener('click', (e) => {
     e.stopPropagation() // don't bubble up and toggle the parent details group
-    selectedAgentId = sa.agent_id
     navigate({ view: 'session-detail', sessionName: focusedTabName, agentId: sa.agent_id })
     const sidebar = document.getElementById('detail-sidebar')
     if (sidebar) sidebar.classList.remove('open')
@@ -2476,7 +2474,7 @@ async function renderStream(opts) {
   const root = opts.root || document.getElementById('detail-stream')
   if (!root) return
   const sessionKey = opts.sessionKey ?? focusedTabName
-  const agentId = opts.agentId ?? selectedAgentId
+  const agentId = opts.agentId ?? tabRegistry.get(focusedTabName)?.agentId ?? null
   const archiveUuid = opts.archiveUuid ?? null
   if (!sessionKey) {
     root.replaceChildren()
@@ -3207,85 +3205,11 @@ function doDetailSend(form) {
  * @param {HTMLElement | null} [ta]
  */
 function autosizeDetailSend(ta) {
-  const el = ta || document.getElementById('detail-send-msg')
-  if (!el) return
-  el.style.height = 'auto'
-  const max = 4 * parseFloat(getComputedStyle(el).lineHeight || '20') + 16
-  el.style.height = Math.min(el.scrollHeight, max) + 'px'
-}
-
-// Wire textarea behaviors once (for the template's hidden copy).
-// Per-tab clones are wired by pinTab via wireTabSend().
-;(function wireDetailSend() {
-  const ta = document.getElementById('detail-send-msg')
   if (!ta) return
-  const form = /** @type {HTMLFormElement | null} */ (document.getElementById('detail-send'))
-  ta.addEventListener('input', () => autosizeDetailSend(ta))
-  ta.addEventListener('keydown', (e) => {
-    // Enter inserts a newline (default textarea behavior); Ctrl+Enter or
-    // Cmd+Enter sends. The Send button works on any device.
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
-      e.preventDefault()
-      if (form) doDetailSend(form)
-    }
-  })
-
-  // File picker
-  const btn = document.getElementById('detail-attach-btn')
-  const input = document.getElementById('detail-attach-input')
-  if (btn && input) {
-    btn.addEventListener('click', () => input.click())
-    input.addEventListener('change', () => {
-      if (input.files && input.files.length > 0) addFiles(currentTab(), input.files)
-      input.value = ''
-    })
-  }
-
-  // Paste: intercept clipboard items that are files (screenshot, copied image, etc.)
-  ta.addEventListener('paste', (e) => {
-    const items = e.clipboardData?.items
-    if (!items) return
-    const files = []
-    for (const it of items)
-      if (it.kind === 'file') {
-        const f = it.getAsFile()
-        if (f) files.push(f)
-      }
-    if (files.length > 0) {
-      e.preventDefault()
-      addFiles(currentTab(), files)
-    }
-  })
-
-  // Drag-and-drop onto the send form (uses the `form` declared at the
-  // top of this IIFE).
-  if (form) {
-    let depth = 0
-    const enter = (e) => {
-      if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return
-      e.preventDefault()
-      depth++
-      form.classList.add('drop-target')
-    }
-    const leave = () => {
-      depth = Math.max(0, depth - 1)
-      if (depth === 0) form.classList.remove('drop-target')
-    }
-    form.addEventListener('dragenter', enter)
-    form.addEventListener('dragover', (e) => {
-      if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'))
-        e.preventDefault()
-    })
-    form.addEventListener('dragleave', leave)
-    form.addEventListener('drop', (e) => {
-      e.preventDefault()
-      depth = 0
-      form.classList.remove('drop-target')
-      const files = e.dataTransfer?.files
-      if (files && files.length > 0) addFiles(currentTab(), files)
-    })
-  }
-})()
+  ta.style.height = 'auto'
+  const max = 4 * parseFloat(getComputedStyle(ta).lineHeight || '20') + 16
+  ta.style.height = Math.min(ta.scrollHeight, max) + 'px'
+}
 
 // --- History view ---
 
