@@ -69,11 +69,6 @@ export function getSessionByName(db: Database, name: string): CcplSessionRow | n
   return row ? rowToSession(row) : null
 }
 
-export function getSessionByToken(db: Database, token: string): CcplSessionRow | null {
-  const row = db.query(`SELECT * FROM ccpl_sessions WHERE token = ?`).get(token)
-  return row ? rowToSession(row) : null
-}
-
 /**
  * Constant-time token lookup. Fetches every row's token and compares with
  * timingSafeEqual; defeats the timing side-channel that SQL `WHERE token = ?`

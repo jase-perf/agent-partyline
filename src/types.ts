@@ -3,9 +3,6 @@ export type MessageType =
   | 'message'
   | 'request'
   | 'response'
-  | 'status'
-  | 'heartbeat'
-  | 'announce'
   | 'permission-request'
   | 'permission-response'
 

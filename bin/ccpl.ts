@@ -145,7 +145,7 @@ function promptYn(q: string): Promise<boolean> {
   })
 }
 
-async function cmdLaunch(name: string): Promise<void> {
+async function cmdLaunch(name: string, extraArgs: string[] = []): Promise<void> {
   validateName(name)
   const token = readToken(name)
   if (!token) die(`No session named '${name}'. Use 'ccpl new ${name}' to create it.`)
@@ -211,6 +211,9 @@ async function cmdLaunch(name: string): Promise<void> {
   }
   if (resumeUuid) {
     baseArgs.push('--resume', resumeUuid)
+  }
+  if (extraArgs.length > 0) {
+    baseArgs.push(...extraArgs)
   }
 
   const env = {
@@ -306,7 +309,9 @@ function printHelp(): void {
   ccpl list [--json]             List all sessions (requires PARTY_LINE_DASHBOARD_PASSWORD)
   ccpl forget <name>             Delete a session and its token
   ccpl rotate <name>             Rotate the token for a session
-  ccpl <name>                    Launch Claude Code with this session
+  ccpl <name> [-- <claude args>] Launch Claude Code with this session.
+                                 Args after '--' are passed through to claude
+                                 verbatim (e.g. --model, --channels).
 
 Environment:
   PARTY_LINE_SWITCHBOARD_URL     Base URL of the dashboard (default: https://localhost:3400)
@@ -315,7 +320,16 @@ Environment:
 }
 
 async function main(): Promise<void> {
-  const [sub, ...rest] = process.argv.slice(2)
+  const argv = process.argv.slice(2)
+
+  // Split at `--`: everything after is passthrough to claude on the launch
+  // path. Subcommands (new/list/forget/rotate) don't accept passthrough and
+  // ignore the split — they only consume their own flags.
+  const ddIdx = argv.indexOf('--')
+  const own = ddIdx >= 0 ? argv.slice(0, ddIdx) : argv
+  const passthrough = ddIdx >= 0 ? argv.slice(ddIdx + 1) : []
+
+  const [sub, ...rest] = own
   if (!sub || sub === '-h' || sub === '--help') {
     printHelp()
     process.exit(sub ? 0 : 1)
@@ -344,7 +358,13 @@ async function main(): Promise<void> {
     await cmdRotate(name)
     return
   }
-  await cmdLaunch(sub)
+  // Launch path. Reject unexpected positional args before `--` to avoid
+  // silently swallowing typos (e.g. `ccpl foo bar` shouldn't run as launch
+  // with bar as some implicit flag).
+  if (rest.length > 0) {
+    die(`Unexpected args: ${rest.join(' ')}. Use 'ccpl <name> [-- <claude args>]'.`)
+  }
+  await cmdLaunch(sub, passthrough)
 }
 
 main().catch((err) => {

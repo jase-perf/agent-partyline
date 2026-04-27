@@ -40,28 +40,3 @@ export function createEnvelope(
     ts: new Date().toISOString(),
   }
 }
-
-/** Serialize an envelope to a UDP datagram. */
-export function serialize(envelope: Envelope): Buffer {
-  return Buffer.from(JSON.stringify(envelope))
-}
-
-/** Deserialize a UDP datagram to an envelope. Returns null if invalid. */
-export function deserialize(data: Buffer): Envelope | null {
-  try {
-    const parsed = JSON.parse(data.toString()) as Record<string, unknown>
-    // Basic validation
-    if (
-      typeof parsed.id !== 'string' ||
-      typeof parsed.from !== 'string' ||
-      typeof parsed.to !== 'string' ||
-      typeof parsed.type !== 'string' ||
-      typeof parsed.body !== 'string'
-    ) {
-      return null
-    }
-    return parsed as unknown as Envelope
-  } catch {
-    return null
-  }
-}
