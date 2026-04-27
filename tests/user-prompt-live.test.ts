@@ -112,6 +112,7 @@ describe('user-prompt end-to-end pipeline', () => {
           /* ignore */
         }
       },
+      getBufferedAmount: () => 0,
     }
     switchboard.handleObserverOpen(
       observerSocket as unknown as Parameters<typeof switchboard.handleObserverOpen>[0],
@@ -176,6 +177,7 @@ describe('user-prompt end-to-end pipeline', () => {
           /* ignore */
         }
       },
+      getBufferedAmount: () => 0,
     }
     switchboard.handleObserverOpen(
       observerSocket as unknown as Parameters<typeof switchboard.handleObserverOpen>[0],

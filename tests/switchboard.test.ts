@@ -17,6 +17,9 @@ function fakeWs(kind: 'session' | 'observer') {
     send(msg: string) {
       sent.push(msg)
     },
+    getBufferedAmount() {
+      return 0
+    },
     close(code?: number, reason?: string) {
       closeCalls.push([code, reason])
     },
@@ -672,6 +675,55 @@ describe('switchboard', () => {
       .filter((f) => f.type === 'envelope')
     expect(postFrames.some((f) => f.id === 'env-post')).toBe(true)
     expect(postFrames.some((f) => f.id === 'env-pre')).toBe(false)
+    cleanup()
+  })
+
+  test('toObservers drops observers exceeding 4 MB backpressure threshold', () => {
+    // Regression: a slow observer (background tab, throttled mobile) accumulates
+    // buffered data when broadcasts outpace its consumption. Above 4 MB the
+    // switchboard must close the socket (1013 Try Again Later) and remove it
+    // from the broadcast set so subsequent broadcasts don't try again.
+    registerSession(db, 'foo', '/tmp')
+    const sb = createSwitchboard(db)
+
+    const sent: string[] = []
+    const closeCalls: Array<[number | undefined, string | undefined]> = []
+    const slowObs = {
+      sent,
+      closeCalls,
+      data: { kind: 'observer' } as Record<string, unknown>,
+      send(msg: string) {
+        sent.push(msg)
+      },
+      getBufferedAmount() {
+        return 5 * 1024 * 1024 // 5 MB — over the 4 MB threshold
+      },
+      close(code?: number, reason?: string) {
+        closeCalls.push([code, reason])
+      },
+    } as unknown as Parameters<ReturnType<typeof createSwitchboard>['handleObserverOpen']>[0] & {
+      sent: string[]
+      closeCalls: Array<[number | undefined, string | undefined]>
+    }
+
+    // Open the observer (snapshot send is direct, doesn't go through toObservers).
+    sb.handleObserverOpen(slowObs as never)
+    sent.length = 0
+    closeCalls.length = 0
+
+    // Trigger a broadcast — toObservers should detect backpressure and drop.
+    sb.broadcastObserverFrame({ type: 'envelope', id: 'x' })
+
+    expect(closeCalls.length).toBe(1)
+    expect(closeCalls[0]?.[0]).toBe(1013)
+    expect(closeCalls[0]?.[1]).toBe('backpressure')
+    // The slow observer must NOT have received the payload.
+    expect(sent.length).toBe(0)
+
+    // A second broadcast must not re-attempt (observer was removed from the set).
+    sb.broadcastObserverFrame({ type: 'envelope', id: 'y' })
+    expect(closeCalls.length).toBe(1) // still 1 — not called again
+    expect(sent.length).toBe(0)
     cleanup()
   })
 

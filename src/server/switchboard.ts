@@ -73,6 +73,8 @@ export interface SwitchboardOpts {
   onUuidAdopted?: (name: string, uuid: string, reason: string) => void
 }
 
+const OBSERVER_BACKPRESSURE_BYTES = 4 * 1024 * 1024 // 4 MB
+
 export function createSwitchboard(db: Database, opts: SwitchboardOpts = {}): Switchboard {
   const sessionsByName = new Map<string, SessionSocket>()
   const observers = new Set<ObserverSocket>()
@@ -85,6 +87,19 @@ export function createSwitchboard(db: Database, opts: SwitchboardOpts = {}): Swi
     const payload = JSON.stringify(frame)
     for (const o of observers) {
       try {
+        // bufferedAmount is the OS-level send buffer. Above this threshold the
+        // observer is consuming slower than we're producing — keep dropping
+        // would OOM the dashboard. Close the connection; the client will
+        // reconnect and get a fresh snapshot.
+        if (o.getBufferedAmount() > OBSERVER_BACKPRESSURE_BYTES) {
+          try {
+            o.close(1013, 'backpressure')
+          } catch {
+            /* ignore */
+          }
+          observers.delete(o)
+          continue
+        }
         o.send(payload)
       } catch {
         /* ignore broken sockets */
