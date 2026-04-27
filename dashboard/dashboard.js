@@ -3792,6 +3792,7 @@ function pinTab(name) {
  */
 function focusTab(name, opts) {
   opts = opts || {}
+  currentView = name === '' ? 'switchboard' : 'session-detail'
   const tab = tabRegistry.get(name)
   if (!tab) {
     console.warn('focusTab called with unknown name', name)
