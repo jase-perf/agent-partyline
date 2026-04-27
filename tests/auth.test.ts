@@ -11,6 +11,7 @@ import {
   isAuthDisabled,
   cookieHeaderForSet,
   cookieHeaderForClear,
+  verifyOrigin,
 } from '../src/server/auth'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -130,5 +131,70 @@ describe('auth', () => {
     }[]
     expect(rows.map((r) => r.cookie)).toEqual([c2])
     cleanup()
+  })
+})
+
+describe('verifyOrigin', () => {
+  function req(headers: Record<string, string>): Request {
+    return new Request('http://example.com/api/foo', { method: 'POST', headers })
+  }
+
+  test('verifyOrigin allows non-browser callers (no Origin or Referer)', () => {
+    expect(verifyOrigin(req({ host: 'localhost:3400' }))).toBe(true)
+  })
+
+  test('verifyOrigin allows matching Origin', () => {
+    expect(
+      verifyOrigin(
+        req({
+          host: 'localhost:3400',
+          origin: 'http://localhost:3400',
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  test('verifyOrigin allows matching https Origin', () => {
+    expect(
+      verifyOrigin(
+        req({
+          host: 'dashboard.example.com',
+          origin: 'https://dashboard.example.com',
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  test('verifyOrigin blocks mismatched Origin', () => {
+    expect(
+      verifyOrigin(
+        req({
+          host: 'localhost:3400',
+          origin: 'https://evil.com',
+        }),
+      ),
+    ).toBe(false)
+  })
+
+  test('verifyOrigin allows matching Referer when no Origin', () => {
+    expect(
+      verifyOrigin(
+        req({
+          host: 'localhost:3400',
+          referer: 'http://localhost:3400/dashboard',
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  test('verifyOrigin blocks mismatched Referer', () => {
+    expect(
+      verifyOrigin(
+        req({
+          host: 'localhost:3400',
+          referer: 'https://evil.com/page',
+        }),
+      ),
+    ).toBe(false)
   })
 })

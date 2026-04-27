@@ -103,3 +103,44 @@ export function cookieHeaderForClear(secure: boolean): string {
 export function pruneExpiredCookies(db: Database): void {
   db.query(`DELETE FROM dashboard_sessions WHERE expires_at < ?`).run(Date.now())
 }
+
+/**
+ * CSRF guard: verify the request's Origin (or Referer fallback) matches the
+ * server's host. Returns true if the request is same-origin OR comes from a
+ * non-browser caller (no Origin/Referer header — e.g., curl, the CLI, or
+ * server-to-server). Returns false on a same-host header that doesn't match,
+ * which is the only thing that should block.
+ *
+ * Browsers always send Origin on POST/DELETE/PUT (per Fetch spec, even with
+ * SameSite=Lax cross-site triggers). A missing Origin AND missing Referer is
+ * either a non-browser caller (legitimate) or a very old browser (vanishingly
+ * rare). Allowing those through preserves the CLI workflow.
+ */
+export function verifyOrigin(req: Request): boolean {
+  const origin = req.headers.get('origin')
+  const referer = req.headers.get('referer')
+  if (!origin && !referer) return true // non-browser caller; allow
+
+  const host = req.headers.get('host')
+  if (!host) return false // can't compare; refuse
+
+  // Build the expected origin from Host. We don't know the scheme from inside
+  // the handler; check both http and https.
+  const candidates = [`http://${host}`, `https://${host}`]
+
+  if (origin) {
+    return candidates.includes(origin)
+  }
+
+  // Referer is a full URL — extract origin.
+  if (referer) {
+    try {
+      const u = new URL(referer)
+      return candidates.includes(`${u.protocol}//${u.host}`)
+    } catch {
+      return false
+    }
+  }
+
+  return false
+}

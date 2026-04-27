@@ -66,6 +66,7 @@ import {
   cookieHeaderForClear,
   isAuthDisabled,
   pruneExpiredCookies,
+  verifyOrigin,
 } from '../src/server/auth.js'
 import {
   handleCcplRegister,
@@ -480,6 +481,12 @@ const server = Bun.serve({
     // --- Auth routes (unauthenticated) ---
 
     if (url.pathname === '/login' && req.method === 'POST') {
+      if (!verifyOrigin(req)) {
+        return new Response(JSON.stringify({ error: 'csrf_blocked' }), {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
       return (async () => {
         const body = (await req.json().catch(() => ({}))) as { password?: string }
         if (!verifyPassword(body.password || '')) {
@@ -520,6 +527,12 @@ const server = Bun.serve({
     }
 
     if (url.pathname === '/logout' && req.method === 'POST') {
+      if (!verifyOrigin(req)) {
+        return new Response(JSON.stringify({ error: 'csrf_blocked' }), {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
       const c = parseCookieHeader(req.headers.get('cookie'))
       if (c) revokeCookie(db, c)
       return new Response(null, {
@@ -697,6 +710,12 @@ const server = Bun.serve({
 
     // REST API: set context override for a session
     if (url.pathname === '/api/overrides' && req.method === 'POST') {
+      if (!verifyOrigin(req)) {
+        return new Response(JSON.stringify({ error: 'csrf_blocked' }), {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
       return (async () => {
         let body: { session?: string; contextLimit?: number }
         try {
@@ -717,6 +736,12 @@ const server = Bun.serve({
 
     // REST API: delete context override for a session
     if (url.pathname === '/api/overrides' && req.method === 'DELETE') {
+      if (!verifyOrigin(req)) {
+        return new Response(JSON.stringify({ error: 'csrf_blocked' }), {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
       return (async () => {
         let body: { session?: string }
         try {
@@ -743,6 +768,12 @@ const server = Bun.serve({
 
     // REST API: permission response — route decision to target session via switchboard
     if (url.pathname === '/api/permission-response' && req.method === 'POST') {
+      if (!verifyOrigin(req)) {
+        return new Response(JSON.stringify({ error: 'csrf_blocked' }), {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
       return (async () => {
         let body: unknown
         try {
@@ -812,6 +843,12 @@ const server = Bun.serve({
 
     // REST API: send message — route through the switchboard.
     if (url.pathname === '/api/send' && req.method === 'POST') {
+      if (!verifyOrigin(req)) {
+        return new Response(JSON.stringify({ error: 'csrf_blocked' }), {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
       return (async () => {
         let body: {
           to?: string
@@ -876,6 +913,12 @@ const server = Bun.serve({
       return (async () => {
         const uploader = resolveUploader(req, db)
         if (!uploader) return new Response('Unauthorized', { status: 401 })
+        if (!verifyOrigin(req)) {
+          return new Response(JSON.stringify({ error: 'csrf_blocked' }), {
+            status: 403,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
         const form = await req.formData().catch(() => null)
         if (!form) {
           return Response.json({ error: 'multipart body required' }, { status: 400 })

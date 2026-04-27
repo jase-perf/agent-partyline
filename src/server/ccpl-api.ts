@@ -12,6 +12,7 @@ import {
   archiveSession,
   pruneInactive,
 } from '../storage/ccpl-queries'
+import { verifyOrigin } from './auth'
 
 function json(body: unknown, status = 200, extraHeaders: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -164,6 +165,7 @@ export async function handleDashboardArchive(
   deps: SessionMutationDeps,
 ): Promise<Response> {
   if (!deps.isAuthed(req)) return json({ error: 'unauthorized' }, 401)
+  if (!verifyOrigin(req)) return json({ error: 'csrf_blocked' }, 403)
   let body: { name?: string }
   try {
     body = (await req.json()) as { name?: string }
@@ -200,6 +202,7 @@ export async function handleDashboardRemove(
   deps: SessionMutationDeps,
 ): Promise<Response> {
   if (!deps.isAuthed(req)) return json({ error: 'unauthorized' }, 401)
+  if (!verifyOrigin(req)) return json({ error: 'csrf_blocked' }, 403)
   let body: { name?: string }
   try {
     body = (await req.json()) as { name?: string }
