@@ -23,6 +23,7 @@ Claude Code sessions are isolated. Each runs in its own process with no awarenes
 The protocol defines the message format, naming convention, and reliability mechanisms. It is independent of any specific transport.
 
 **Message envelope:**
+
 ```json
 {
   "id": "unique-message-id",
@@ -43,11 +44,13 @@ The protocol defines the message format, naming convention, and reliability mech
 Every message is transmitted twice, ~50ms apart. Receivers deduplicate by message `id`. This is simple, adds near-zero complexity, and on localhost handles the only realistic failure mode (receiver buffer momentarily full). No sequence tracking, no sliding windows, no retransmission protocol.
 
 **Heartbeat + announce:**
+
 - Sessions send a `heartbeat` message every 30 seconds to `"all"`.
 - On startup, sessions send an `announce` message with their name and capabilities.
 - The dashboard (and other sessions) use heartbeats to track who's online. A session with no heartbeat for 2+ intervals is considered offline.
 
 **Request/response:**
+
 - `type: "request"` messages include a `callback_id`.
 - Recipient responds with `type: "response"` and `response_to: <callback_id>`.
 - Requester can timeout if no response within a configurable window.
@@ -57,6 +60,7 @@ Every message is transmitted twice, ~50ms apart. Receivers deduplicate by messag
 Each adapter implements the party line protocol over a specific medium. The MCP channel plugin uses one or more adapters.
 
 **UDP Multicast (primary — local machine):**
+
 - All processes join multicast group `239.77.76.10` port `47100` on localhost.
 - Messages are JSON-encoded UDP datagrams.
 - Zero dependencies — uses Bun's native `node:dgram` or `Bun.udpSocket()`.
@@ -64,6 +68,7 @@ Each adapter implements the party line protocol over a specific medium. The MCP 
 - Discovery is implicit: join the group, hear all heartbeats.
 
 **Future adapters (not in MVP):**
+
 - **Discord threads** — bot in a server, each session owns a thread. Filter by thread ID. Enables remote inter-session messaging via Discord.
 - **Email** — custom From addresses (e.g., `session-discord@domain.com`). All channels see incoming email, filter by recipient address. Async transport for non-urgent communication.
 - **Webhooks** — single endpoint, route by payload field.
@@ -295,6 +300,7 @@ Note: Claude Code does not expose `--name` via env var to MCP subprocesses. The 
 ## Current Status (2026-04-20)
 
 **Fully working:**
+
 - All code compiles cleanly — TypeScript errors fixed (including @types/bun, tsconfig, TTL issue)
 - UDP multicast transport — cross-process messaging tested and confirmed working
 - Web dashboard — HTTP server, REST API, WebSocket bridge, live session/message feed
@@ -319,6 +325,7 @@ Note: Claude Code does not expose `--name` via env var to MCP subprocesses. The 
 - **Remote host emitters** — macOS/Linux (`hooks/remote/emit.sh`) and Windows (`hooks/remote/emit.ps1`)
 
 **Known constraints:**
+
 - Must use `--dangerously-load-development-channels server:party-line` for full channel behavior (including wake-on-message notifications). Using `--channels plugin:name@marketplace` only registers tools, not notifications, for non-Anthropic-allowlisted plugins.
 - The `server:` format loads `.mcp.json` from the working directory. Use `--mcp-config <path>` if the session runs from a different directory.
 - `.mcp.json` must use absolute paths (not `${CLAUDE_PLUGIN_ROOT}`) when loaded as `server:` format.
@@ -327,6 +334,7 @@ Note: Claude Code does not expose `--name` via env var to MCP subprocesses. The 
 - `fs.watch({ recursive: true })` is broken on Bun/Linux — JSONL observer uses polling instead.
 
 **Remaining work / future improvements:**
+
 - Permission relay — forward tool approval prompts from headless sessions via party line
 - Structured message types — beyond plain text (status updates, task references, file paths)
 - Multi-address `to` field — array of session names for targeted broadcasts
@@ -360,6 +368,7 @@ Both paths converge on a clean re-render without requiring manual refresh from t
 
 ## Design Decisions Made
 
+- **At-most-once envelope delivery** — the switchboard inserts each envelope into SQLite (`messages`) before fanning out to recipient WebSocket clients. If the dashboard process dies, restarts, or a recipient is mid-disconnect, the envelope persists in the table but is not retried — the recipient will not see it via WebSocket on reconnect. Sessions can query `/ccpl/history` (or the dashboard `/api/transcript`) to backfill missed envelopes by id. This trade-off was made because (a) the dashboard rarely restarts in practice and (b) inter-agent messaging is a small fraction of dashboard traffic. If higher reliability becomes important, the natural extension is per-session `last_seen_id` tracking with a SELECT-and-replay step inside the `hello` handler.
 - **UDP multicast over SQLite** — real-time, decentralized, zero dependencies. No polling.
 - **Send-twice for reliability** — simplest possible redundancy. On localhost, this handles the only realistic failure mode (buffer overflow). No sequence numbers, no ACK/NACK, no sliding windows.
 - **Heartbeat + announce for presence** — no registry file, no database. Sessions discover each other passively through multicast traffic.
