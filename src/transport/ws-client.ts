@@ -164,7 +164,14 @@ export function createWsClient(opts: WsClientOpts): WsClient {
     })
 
     ws.addEventListener('error', (e) => {
-      log('warn', `ws error: ${String(e)}`)
+      log('warn', `ws error: ${String(e)} — closing to trigger reconnect`)
+      try {
+        if (ws && ws.readyState !== WebSocket.CLOSED) {
+          ws.close(4001, 'transport_error')
+        }
+      } catch {
+        /* ignore */
+      }
     })
   }
 
