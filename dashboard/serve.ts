@@ -1291,11 +1291,11 @@ async function main(): Promise<void> {
   console.log()
 }
 
-function shutdown(): void {
+async function shutdown(): Promise<void> {
   jsonlObserver.stop()
   geminiObserver.stop()
   db.close()
-  stopQuotaPoller()
+  await stopQuotaPoller()
   server.stop()
   process.exit(0)
 }

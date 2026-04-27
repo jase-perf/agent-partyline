@@ -32,10 +32,7 @@ export interface QuotaStatus {
   fetchedAt: string
 }
 
-const CREDENTIALS_PATH = resolve(
-  process.env.HOME ?? '/home/claude',
-  '.claude/.credentials.json',
-)
+const CREDENTIALS_PATH = resolve(process.env.HOME ?? '/home/claude', '.claude/.credentials.json')
 
 function getOAuthToken(): string | null {
   try {
@@ -50,50 +47,53 @@ function getOAuthToken(): string | null {
 
 let latestQuota: QuotaStatus | null = null
 let pollTimer: ReturnType<typeof setInterval> | null = null
+let inFlight: Promise<QuotaStatus | null> | null = null
 
 async function fetchQuota(): Promise<QuotaStatus | null> {
   const token = getOAuthToken()
   if (!token) return null
-
-  try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': token,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1,
-        messages: [{ role: 'user', content: '.' }],
-      }),
-    })
-
-    const h = (name: string): string => resp.headers.get(name) ?? ''
-
-    const quota: QuotaStatus = {
-      fiveHourUtilization: parseFloat(h('anthropic-ratelimit-unified-5h-utilization')) || 0,
-      fiveHourReset: parseInt(h('anthropic-ratelimit-unified-5h-reset'), 10) || 0,
-      sevenDayUtilization: parseFloat(h('anthropic-ratelimit-unified-7d-utilization')) || 0,
-      sevenDayReset: parseInt(h('anthropic-ratelimit-unified-7d-reset'), 10) || 0,
-      overageUtilization: parseFloat(h('anthropic-ratelimit-unified-overage-utilization')) || 0,
-      overageReset: parseInt(h('anthropic-ratelimit-unified-overage-reset'), 10) || 0,
-      status: h('anthropic-ratelimit-unified-status') || 'unknown',
-      fallbackAvailable: h('anthropic-ratelimit-unified-fallback') === 'available',
-      fallbackPercentage: parseFloat(h('anthropic-ratelimit-unified-fallback-percentage')) || 0,
-      fetchedAt: new Date().toISOString(),
+  const promise = (async (): Promise<QuotaStatus | null> => {
+    try {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': token,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 1,
+          messages: [{ role: 'user', content: '.' }],
+        }),
+      })
+      const h = (name: string): string => resp.headers.get(name) ?? ''
+      const quota: QuotaStatus = {
+        fiveHourUtilization: parseFloat(h('anthropic-ratelimit-unified-5h-utilization')) || 0,
+        fiveHourReset: parseInt(h('anthropic-ratelimit-unified-5h-reset'), 10) || 0,
+        sevenDayUtilization: parseFloat(h('anthropic-ratelimit-unified-7d-utilization')) || 0,
+        sevenDayReset: parseInt(h('anthropic-ratelimit-unified-7d-reset'), 10) || 0,
+        overageUtilization: parseFloat(h('anthropic-ratelimit-unified-overage-utilization')) || 0,
+        overageReset: parseInt(h('anthropic-ratelimit-unified-overage-reset'), 10) || 0,
+        status: h('anthropic-ratelimit-unified-status') || 'unknown',
+        fallbackAvailable: h('anthropic-ratelimit-unified-fallback') === 'available',
+        fallbackPercentage: parseFloat(h('anthropic-ratelimit-unified-fallback-percentage')) || 0,
+        fetchedAt: new Date().toISOString(),
+      }
+      await resp.text()
+      latestQuota = quota
+      return quota
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      process.stderr.write(`[quota] fetch error: ${msg}\n`)
+      return null
     }
-
-    // Consume the response body to free the connection
-    await resp.text()
-
-    latestQuota = quota
-    return quota
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    process.stderr.write(`[quota] fetch error: ${msg}\n`)
-    return null
+  })()
+  inFlight = promise
+  try {
+    return await promise
+  } finally {
+    if (inFlight === promise) inFlight = null
   }
 }
 
@@ -104,9 +104,17 @@ export function startQuotaPoller(intervalMs: number = 300_000): void {
   pollTimer = setInterval(() => void fetchQuota(), intervalMs)
 }
 
-/** Stop polling. */
-export function stopQuotaPoller(): void {
+/** Stop polling. Awaits any in-flight fetch so shutdown is clean. */
+export async function stopQuotaPoller(): Promise<void> {
   if (pollTimer) clearInterval(pollTimer)
+  pollTimer = null
+  if (inFlight) {
+    try {
+      await inFlight
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 /** Get the most recent quota status. */
