@@ -1181,6 +1181,16 @@ const server = Bun.serve({
           helloTimer?: ReturnType<typeof setTimeout>
           name?: string
         }
+        // Respond to pings BEFORE the hello check — clients may send pings
+        // pre-hello during reconnect, and the pong proves liveness.
+        if (frame.type === 'ping') {
+          try {
+            ws.send(JSON.stringify({ type: 'pong', ts: Date.now() }))
+          } catch {
+            /* ignore */
+          }
+          return
+        }
         if (frame.type === 'hello') {
           if (wsData.helloTimer) clearTimeout(wsData.helloTimer)
           wsData.helloTimer = undefined

@@ -19,6 +19,7 @@ export interface WsClientOpts {
    */
   helloPayload: HelloPayload | (() => HelloPayload)
   pingIntervalMs?: number
+  pongTimeoutMs?: number
   reconnectInitialMs?: number
   reconnectMaxMs?: number
   logger?: (level: 'info' | 'warn' | 'error', msg: string) => void
@@ -35,9 +36,11 @@ export function createWsClient(opts: WsClientOpts): WsClient {
   const emitter = new EventEmitter() as WsClient
   let ws: WebSocket | null = null
   let pingTimer: Timer | null = null
+  let pongCheckTimer: Timer | null = null
   let reconnectTimer: Timer | null = null
   let reconnectDelay = opts.reconnectInitialMs ?? 100
   let stopped = false
+  let lastPongAt = 0
   const log = opts.logger ?? (() => {})
 
   function setPingTimer(): void {
@@ -51,6 +54,25 @@ export function createWsClient(opts: WsClientOpts): WsClient {
         }
       }
     }, opts.pingIntervalMs ?? 20_000)
+  }
+
+  function setPongCheckTimer(): void {
+    if (pongCheckTimer) clearInterval(pongCheckTimer)
+    const timeout = opts.pongTimeoutMs ?? 60_000
+    pongCheckTimer = setInterval(
+      () => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return
+        if (Date.now() - lastPongAt > timeout) {
+          log('warn', `pong timeout (${timeout}ms since last frame); force-close`)
+          try {
+            ws.close(4000, 'pong_timeout')
+          } catch {
+            /* ignore */
+          }
+        }
+      },
+      Math.min(opts.pingIntervalMs ?? 20_000, 10_000),
+    )
   }
 
   function scheduleReconnect(): void {
@@ -90,6 +112,7 @@ export function createWsClient(opts: WsClientOpts): WsClient {
     ws.addEventListener('open', () => {
       log('info', `ws open to ${opts.url}`)
       reconnectDelay = opts.reconnectInitialMs ?? 100
+      lastPongAt = Date.now()
       try {
         const payload =
           typeof opts.helloPayload === 'function' ? opts.helloPayload() : opts.helloPayload
@@ -98,10 +121,12 @@ export function createWsClient(opts: WsClientOpts): WsClient {
         log('error', `hello send failed: ${String(err)}`)
       }
       setPingTimer()
+      setPongCheckTimer()
       emitter.emit('open')
     })
 
     ws.addEventListener('message', (e) => {
+      lastPongAt = Date.now() // ANY frame from the server proves liveness
       let data: { type?: string }
       try {
         data = JSON.parse(e.data as string) as { type?: string }
@@ -118,6 +143,10 @@ export function createWsClient(opts: WsClientOpts): WsClient {
       if (pingTimer) {
         clearInterval(pingTimer)
         pingTimer = null
+      }
+      if (pongCheckTimer) {
+        clearInterval(pongCheckTimer)
+        pongCheckTimer = null
       }
       emitter.emit('close', e.code, e.reason)
       // Permanent failures: don't reconnect.
@@ -141,6 +170,7 @@ export function createWsClient(opts: WsClientOpts): WsClient {
   emitter.stop = () => {
     stopped = true
     if (pingTimer) clearInterval(pingTimer)
+    if (pongCheckTimer) clearInterval(pongCheckTimer)
     if (reconnectTimer) clearTimeout(reconnectTimer)
     if (ws) ws.close()
   }

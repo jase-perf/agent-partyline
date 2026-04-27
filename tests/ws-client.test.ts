@@ -228,6 +228,59 @@ describe('ws-client', () => {
     }
   })
 
+  test('force-closes WS when no pong arrives within pongTimeoutMs', async () => {
+    // Server accepts the hello but goes silent — never replies to anything
+    // after that. The client should detect the silence (no frames received
+    // in pongTimeoutMs window) and force-close with code 4000 'pong_timeout',
+    // which then triggers a reconnect (so we expect openCount >= 2).
+    let openCount = 0
+    const server = Bun.serve({
+      port: 0,
+      fetch(req, s) {
+        if (s.upgrade(req)) return
+        return new Response('no', { status: 400 })
+      },
+      websocket: {
+        open(_ws) {
+          openCount++
+        },
+        message() {
+          // intentionally silent — no accepted, no pong
+        },
+      },
+    })
+    const url = `ws://localhost:${server.port}/`
+    const closeCodes: Array<number> = []
+    const client = createWsClient({
+      url,
+      helloPayload: {
+        type: 'hello',
+        token: 't',
+        name: 'pongtest',
+        cc_session_uuid: null,
+        pid: 1,
+        machine_id: null,
+        version: 'test',
+      },
+      pingIntervalMs: 50, // forces pong-check interval to min(50, 10_000) = 50ms
+      pongTimeoutMs: 100, // very short for test
+      reconnectInitialMs: 30,
+      reconnectMaxMs: 50,
+    })
+    client.on('close', (code: number) => closeCodes.push(code))
+    client.start()
+
+    // Wait long enough for: open -> 100ms silence -> force-close -> reconnect
+    for (let i = 0; i < 50 && openCount < 2; i++) {
+      await new Promise((r) => setTimeout(r, 30))
+    }
+    expect(openCount).toBeGreaterThanOrEqual(2)
+    expect(closeCodes).toContain(4000)
+
+    client.stop()
+    server.stop()
+  })
+
   test('does NOT reconnect on close code 4401', async () => {
     let openCount = 0
     const server = Bun.serve({
