@@ -888,15 +888,6 @@ function handleSessionRemoved(name) {
   window.addEventListener('scroll', hideCtxMenu, { passive: true, capture: true })
 })()
 
-// Kebab on the session-detail header.
-document.getElementById('detail-actions')?.addEventListener('click', (ev) => {
-  ev.stopPropagation()
-  if (!focusedTabName) return
-  const btn = ev.currentTarget
-  const r = btn.getBoundingClientRect()
-  showSessionActionsMenu(focusedTabName, r.left, r.bottom + 4)
-})
-
 // Close ctx-menu on Escape.
 document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape') hideCtxMenu()
@@ -3492,15 +3483,6 @@ document.getElementById('history-subtabs').addEventListener('click', (e) => {
   window.history.replaceState({ view: 'history', subtab: sub }, '', url)
 })
 
-document.getElementById('detail-back').addEventListener('click', function () {
-  var tab = document.querySelector('button[data-view="switchboard"]')
-  if (tab) tab.click()
-})
-
-document.getElementById('detail-drawer-toggle').addEventListener('click', () => {
-  document.getElementById('detail-sidebar').classList.toggle('open')
-})
-
 window.addEventListener('popstate', (e) => {
   const state = e.state && typeof e.state === 'object' ? e.state : parseUrl()
   applyRoute(state, { skipPush: true })
@@ -3700,6 +3682,46 @@ function wireTabFormHandlers(contentEl) {
         navigate({ view: 'session-detail', sessionName: pl.dataset.otherSession, agentId: null })
         return
       }
+    })
+  }
+
+  // Back button
+  const backBtn = scopedById(contentEl, 'detail-back')
+  if (backBtn) {
+    backBtn.addEventListener('click', () => {
+      const stripBtn = document.querySelector('button[data-view="switchboard"]')
+      if (stripBtn instanceof HTMLElement) stripBtn.click()
+    })
+  }
+
+  // Drawer toggle (mobile sidebar)
+  const drawerBtn = scopedById(contentEl, 'detail-drawer-toggle')
+  const sidebar = scopedById(contentEl, 'detail-sidebar')
+  if (drawerBtn && sidebar) {
+    drawerBtn.addEventListener('click', () => {
+      sidebar.classList.toggle('open')
+    })
+  }
+
+  // Kebab menu
+  const actionsBtn = scopedById(contentEl, 'detail-actions')
+  if (actionsBtn) {
+    actionsBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation()
+      const tabName = contentEl.dataset.tabName
+      if (!tabName) return
+      const r = actionsBtn.getBoundingClientRect()
+      showSessionActionsMenu(tabName, r.left, r.bottom + 4)
+    })
+  }
+
+  // Bell toggle
+  const bellEl = scopedById(contentEl, 'detail-bell')
+  if (bellEl) {
+    bellEl.addEventListener('click', () => {
+      const session = bellEl.getAttribute('data-session')
+      if (!session) return
+      handleBellClick(bellEl, session)
     })
   }
 }
@@ -4337,15 +4359,6 @@ document.getElementById('overview-grid')?.addEventListener('click', (ev) => {
   const session = bell.getAttribute('data-session')
   if (!session) return
 
-  handleBellClick(bell, session)
-})
-
-// Session Detail header bell toggle.
-document.getElementById('detail-bell')?.addEventListener('click', (ev) => {
-  const bell = ev.currentTarget
-  if (!(bell instanceof HTMLElement)) return
-  const session = bell.getAttribute('data-session')
-  if (!session) return
   handleBellClick(bell, session)
 })
 
