@@ -334,7 +334,12 @@ export function createSwitchboard(db: Database, opts: SwitchboardOpts = {}): Swi
     },
 
     handleObserverOpen(ws) {
-      observers.add(ws)
+      // CRITICAL ORDERING: send the snapshot BEFORE registering as an observer.
+      // If we add to the set first, a routeEnvelope call between add+send can
+      // deliver a session-delta at revision X, then this snapshot (built before
+      // that delta) lands at revision X-1 and the client clobbers fresh state.
+      // By sending snapshot first, the client sees snapshot → deltas in causal
+      // order regardless of timing.
       const rows = listSessions(db)
       try {
         ws.send(
@@ -352,6 +357,7 @@ export function createSwitchboard(db: Database, opts: SwitchboardOpts = {}): Swi
       } catch {
         /* ignore */
       }
+      observers.add(ws)
     },
 
     handleObserverFrame(_ws, frame) {

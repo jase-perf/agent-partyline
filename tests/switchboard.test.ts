@@ -626,6 +626,55 @@ describe('switchboard', () => {
     cleanup()
   })
 
+  test('handleObserverOpen sends snapshot before joining the broadcast set', () => {
+    // Regression: previously observers.add(ws) ran BEFORE the snapshot send,
+    // which let a routeEnvelope between add+send deliver a session-delta at
+    // revision X, then the snapshot (built before that delta) landed at
+    // revision X-1 and the client clobbered fresh state. The fix sends the
+    // snapshot first, then joins the broadcast set — so the snapshot is
+    // ALWAYS the first thing the observer sees.
+    registerSession(db, 'foo', '/tmp')
+    const sb = createSwitchboard(db)
+    const obs = fakeWs('observer')
+
+    // Pre-open envelope: must NOT reach the observer (it's not in the set yet).
+    sb.routeEnvelope({
+      id: 'env-pre',
+      ts: 1000,
+      from: 'dashboard',
+      to: 'foo',
+      envelope_type: 'message',
+      body: 'before-open',
+      callback_id: null,
+      response_to: null,
+    })
+    expect(obs.sent.length).toBe(0)
+
+    // Open the observer. The snapshot must land synchronously, FIRST.
+    sb.handleObserverOpen(obs as never)
+    expect(obs.sent.length).toBe(1)
+    const first = JSON.parse(obs.sent[0]!) as { type: string }
+    expect(first.type).toBe('sessions-snapshot')
+
+    // Post-open envelope: must reach the observer (now in the set).
+    sb.routeEnvelope({
+      id: 'env-post',
+      ts: 2000,
+      from: 'dashboard',
+      to: 'foo',
+      envelope_type: 'message',
+      body: 'after-open',
+      callback_id: null,
+      response_to: null,
+    })
+    const postFrames = obs.sent
+      .map((s) => JSON.parse(s) as { type: string; id?: string })
+      .filter((f) => f.type === 'envelope')
+    expect(postFrames.some((f) => f.id === 'env-post')).toBe(true)
+    expect(postFrames.some((f) => f.id === 'env-pre')).toBe(false)
+    cleanup()
+  })
+
   test('Case B — onUuidAdopted fires for stranger uuid (dashboard wires backfill there)', () => {
     registerSession(db, 'foo', '/tmp')
     const adopted: Array<{ name: string; uuid: string }> = []
