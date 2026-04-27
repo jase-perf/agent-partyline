@@ -506,12 +506,14 @@ const server = Bun.serve({
     }
 
     if (url.pathname === '/login.js') {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       return new Response(Bun.file(resolve(__dirname, 'login.js')), {
         headers: { 'Content-Type': 'application/javascript' },
       })
     }
 
     if (url.pathname === '/dashboard.css') {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       return new Response(Bun.file(dashboardCssPath), {
         headers: { 'Content-Type': 'text/css' },
       })
@@ -595,6 +597,7 @@ const server = Bun.serve({
     // the Service Worker from a logged-out state. These files leak no
     // session data.
     if (url.pathname === '/sw.js') {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       return new Response(Bun.file(resolve(__dirname, 'sw.js')), {
         headers: {
           'Content-Type': 'application/javascript',
@@ -604,6 +607,7 @@ const server = Bun.serve({
       })
     }
     if (url.pathname === '/manifest.json') {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       return new Response(Bun.file(resolve(__dirname, 'manifest.json')), {
         headers: {
           'Content-Type': 'application/manifest+json',
@@ -612,6 +616,7 @@ const server = Bun.serve({
       })
     }
     if (url.pathname === '/favicon.ico') {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       return new Response(Bun.file(resolve(__dirname, 'favicon.ico')), {
         headers: {
           'Content-Type': 'image/x-icon',
@@ -620,6 +625,7 @@ const server = Bun.serve({
       })
     }
     if (url.pathname.startsWith('/icons/')) {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       const rel = url.pathname.slice(1)
       if (rel.includes('..')) return new Response('Not found', { status: 404 })
       return new Response(Bun.file(resolve(__dirname, rel)), {
@@ -660,6 +666,7 @@ const server = Bun.serve({
 
     // REST API: list sessions (debug-friendly view of ccpl_sessions)
     if (url.pathname === '/api/sessions') {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       const rows = listCcplSessions(db).map((r) => ({
         name: r.name,
         online: r.online,
@@ -730,6 +737,7 @@ const server = Bun.serve({
 
     // REST API: quota status
     if (url.pathname === '/api/quota') {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       return Response.json(getQuota() ?? { error: 'no data yet' })
     }
 
@@ -777,6 +785,7 @@ const server = Bun.serve({
 
     // REST API: message history — reads the switchboard-persisted messages table.
     if (url.pathname === '/api/history') {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       const limit = parseInt(url.searchParams.get('limit') ?? '50', 10)
       const rows = db.query(`SELECT * FROM messages ORDER BY ts DESC LIMIT ?`).all(limit) as Array<{
         id: string
@@ -932,6 +941,7 @@ const server = Bun.serve({
 
     // REST API: single session + subagents
     if (url.pathname === '/api/session' && url.searchParams.get('id')) {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       const id = url.searchParams.get('id')!
       return Response.json({
         session: aggregator.getSession(id),
@@ -941,6 +951,7 @@ const server = Bun.serve({
 
     // REST API: recent events (all or filtered by session)
     if (url.pathname === '/api/events') {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       const id = url.searchParams.get('session_id') ?? undefined
       const limit = parseInt(url.searchParams.get('limit') ?? '50', 10)
       return Response.json(recentEvents(db, { sessionId: id, limit }))
@@ -953,6 +964,7 @@ const server = Bun.serve({
     //   If after_uuid is unknown (stale, file compacted), the full transcript
     //   is returned as a graceful fallback.
     if (url.pathname === '/api/transcript') {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       const sidParam = url.searchParams.get('session_id')
       if (!sidParam) return Response.json({ error: 'session_id required' }, { status: 400 })
       const explicitUuid = url.searchParams.get('uuid')
@@ -1009,17 +1021,20 @@ const server = Bun.serve({
 
     // REST API: sparkline (hourly tool calls over last 24h for a session)
     if (url.pathname === '/api/sparkline' && url.searchParams.get('session_id')) {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       const id = url.searchParams.get('session_id')!
       return Response.json({ buckets: hourlyToolCalls(db, id) })
     }
 
     // REST API: self (local machine identity)
     if (url.pathname === '/api/self') {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       return Response.json({ machine_id: machineId })
     }
 
     // REST API: machines
     if (url.pathname === '/api/machines') {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       const machines = db
         .query<
           { id: string; hostname: string; first_seen: string; last_seen: string },
@@ -1031,6 +1046,7 @@ const server = Bun.serve({
 
     // Static assets: vendor files
     if (url.pathname.startsWith('/vendor/')) {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       const name = url.pathname.slice('/vendor/'.length)
       if (!/^[a-zA-Z0-9._-]+$/.test(name)) return new Response('Not Found', { status: 404 })
       try {
@@ -1044,27 +1060,32 @@ const server = Bun.serve({
 
     // Static assets — served via Bun.file() so edits land without a restart.
     if (url.pathname === '/dashboard.js') {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       return new Response(Bun.file(dashboardJsPath), {
         headers: { 'Content-Type': 'application/javascript' },
       })
     }
     if (url.pathname === '/notifications.js') {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       return new Response(Bun.file(notificationsJsPath), {
         headers: { 'Content-Type': 'application/javascript' },
       })
     }
     if (url.pathname === '/transcript-grouping.js') {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       return new Response(Bun.file(transcriptGroupingJsPath), {
         headers: { 'Content-Type': 'application/javascript' },
       })
     }
     if (url.pathname === '/tabs-state.js') {
+      if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
       return new Response(Bun.file(tabsStateJsPath), {
         headers: { 'Content-Type': 'application/javascript' },
       })
     }
 
-    // Dashboard HTML
+    // Dashboard HTML (catch-all for client-side router)
+    if (req.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
     return new Response(Bun.file(indexHtmlPath), {
       headers: { 'Content-Type': 'text/html' },
     })
