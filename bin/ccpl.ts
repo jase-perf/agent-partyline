@@ -9,6 +9,7 @@ import {
   readdirSync,
   existsSync,
   unlinkSync,
+  renameSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
@@ -46,7 +47,13 @@ function readToken(name: string): string | null {
 function writeToken(name: string, token: string): void {
   mkdirSync(SESS_DIR, { recursive: true, mode: 0o700 })
   chmodSync(SESS_DIR, 0o700)
-  writeFileSync(tokenPath(name), token, { mode: 0o600 })
+  // Atomic write: write to a sibling tmp file with O_EXCL so a concurrent
+  // writer can't overwrite ours mid-flight, then rename. POSIX rename(2) is
+  // atomic on the same filesystem. Use a unique tmp name per call so two
+  // concurrent invocations for the same name don't collide.
+  const tmp = `${tokenPath(name)}.${process.pid}.${Date.now()}.tmp`
+  writeFileSync(tmp, token, { mode: 0o600, flag: 'wx' })
+  renameSync(tmp, tokenPath(name))
 }
 
 function removeToken(name: string): void {
