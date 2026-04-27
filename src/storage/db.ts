@@ -240,10 +240,19 @@ export function openDb(path: string): Database {
     // Fresh DB: apply the full declarative schema in one transaction and stamp
     // user_version so future opens skip migration entirely.
     const schema = readFileSync(SCHEMA_PATH, 'utf-8')
-    db.transaction(() => {
+    db.exec('BEGIN EXCLUSIVE')
+    try {
       db.exec(schema)
       db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
-    })()
+      db.exec('COMMIT')
+    } catch (e) {
+      try {
+        db.exec('ROLLBACK')
+      } catch {
+        /* ignore */
+      }
+      throw e
+    }
   } else if (currentVersion < SCHEMA_VERSION) {
     // Existing DB at an older version: run only the incremental migrations.
     applyMigrations(db, currentVersion)
@@ -262,9 +271,18 @@ function applyMigrations(db: Database, fromVersion: number): void {
     const targetVersion = v + 1
     const step = MIGRATIONS[targetVersion]
     if (!step) throw new Error(`No migration registered for v${v} → v${targetVersion}`)
-    db.transaction(() => {
+    db.exec('BEGIN EXCLUSIVE')
+    try {
       step(db)
       db.exec(`PRAGMA user_version = ${targetVersion}`)
-    })()
+      db.exec('COMMIT')
+    } catch (e) {
+      try {
+        db.exec('ROLLBACK')
+      } catch {
+        /* ignore secondary failure */
+      }
+      throw e
+    }
   }
 }

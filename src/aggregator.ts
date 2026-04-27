@@ -13,13 +13,57 @@ export interface SubagentRow {
 }
 
 type Listener = (s: SessionRow) => void
+type Stmt = ReturnType<Database['query']>
 
 const WORKING_EVENTS = new Set(['PostToolUse', 'PreToolUse', 'UserPromptSubmit'])
 const IDLE_EVENTS = new Set(['Stop', 'SessionEnd', 'SessionStart'])
 
+/** Subagents started within this window are not cancelled on UserPromptSubmit.
+ *  Subagents started recently may not have fired SubagentStop yet (e.g. ESC
+ *  mid-task), so cancelling them immediately is too aggressive. */
+const CANCEL_GRACE_MS = 10_000
+
 export class Aggregator {
   private listeners: Listener[] = []
-  constructor(private db: Database) {}
+
+  private readonly stmtSubagentStart: Stmt
+  private readonly stmtSubagentStop: Stmt
+  private readonly stmtCancelSubagents: Stmt
+  private readonly stmtInsertToolCall: Stmt
+  private readonly stmtGetSessionById: Stmt
+  private readonly stmtGetSessionByName: Stmt
+  private readonly stmtGetSubagents: Stmt
+  private readonly stmtListSessions: Stmt
+
+  constructor(private db: Database) {
+    this.stmtSubagentStart = db.query(
+      `INSERT INTO subagents (agent_id, session_id, agent_type, description, started_at, status)
+       VALUES ($a, $s, $t, $d, $ts, 'running')
+       ON CONFLICT(agent_id) DO UPDATE SET status='running', started_at=excluded.started_at`,
+    )
+    this.stmtSubagentStop = db.query(
+      `UPDATE subagents SET status='completed', ended_at=$ts WHERE agent_id=$a`,
+    )
+    // Cancel orphaned subagents, but skip those started within the grace window.
+    // started_at < $grace filters out subagents that may not have fired
+    // SubagentStop yet because the ESC/kill happened too recently.
+    this.stmtCancelSubagents = db.query(
+      `UPDATE subagents SET status='cancelled', ended_at=$ts
+       WHERE session_id=$s AND status='running' AND started_at < $grace`,
+    )
+    this.stmtInsertToolCall = db.query(
+      `INSERT INTO tool_calls (session_id, agent_id, tool_name, started_at, ended_at, success)
+       VALUES ($s, $a, $t, $ts, $ts, $ok)`,
+    )
+    this.stmtGetSessionById = db.query(`SELECT * FROM sessions WHERE session_id=$id`)
+    this.stmtGetSessionByName = db.query(
+      `SELECT * FROM sessions WHERE name=$name ORDER BY last_seen DESC LIMIT 1`,
+    )
+    this.stmtGetSubagents = db.query(
+      `SELECT * FROM subagents WHERE session_id=$s ORDER BY started_at DESC`,
+    )
+    this.stmtListSessions = db.query(`SELECT * FROM sessions ORDER BY last_seen DESC`)
+  }
 
   onUpdate(l: Listener): void {
     this.listeners.push(l)
@@ -53,23 +97,15 @@ export class Aggregator {
     })
 
     if (ev.hook_event === 'SubagentStart' && ev.agent_id) {
-      this.db
-        .query(
-          `INSERT INTO subagents (agent_id, session_id, agent_type, description, started_at, status)
-           VALUES ($a, $s, $t, $d, $ts, 'running')
-           ON CONFLICT(agent_id) DO UPDATE SET status='running', started_at=excluded.started_at`,
-        )
-        .run({
-          $a: ev.agent_id,
-          $s: ev.session_id,
-          $t: ev.agent_type ?? (ev.payload as { agent_type?: string }).agent_type ?? null,
-          $d: (ev.payload as { description?: string }).description ?? null,
-          $ts: ev.ts,
-        })
+      this.stmtSubagentStart.run({
+        $a: ev.agent_id,
+        $s: ev.session_id,
+        $t: ev.agent_type ?? (ev.payload as { agent_type?: string }).agent_type ?? null,
+        $d: (ev.payload as { description?: string }).description ?? null,
+        $ts: ev.ts,
+      })
     } else if (ev.hook_event === 'SubagentStop' && ev.agent_id) {
-      this.db
-        .query(`UPDATE subagents SET status='completed', ended_at=$ts WHERE agent_id=$a`)
-        .run({ $a: ev.agent_id, $ts: ev.ts })
+      this.stmtSubagentStop.run({ $a: ev.agent_id, $ts: ev.ts })
     }
 
     // Cancel orphaned subagents when the parent turn ends without a clean
@@ -85,12 +121,8 @@ export class Aggregator {
         ev.hook_event === 'SessionStart' ||
         ev.hook_event === 'SessionEnd')
     ) {
-      this.db
-        .query(
-          `UPDATE subagents SET status='cancelled', ended_at=$ts
-           WHERE session_id=$s AND status='running'`,
-        )
-        .run({ $s: ev.session_id, $ts: ev.ts })
+      const graceCutoff = new Date(new Date(ev.ts).getTime() - CANCEL_GRACE_MS).toISOString()
+      this.stmtCancelSubagents.run({ $ts: ev.ts, $s: ev.session_id, $grace: graceCutoff })
     }
 
     if (ev.hook_event === 'PostToolUse') {
@@ -101,18 +133,13 @@ export class Aggregator {
       const tr = p.tool_response
       const success =
         tr && (tr.success === false || tr.isError === true || tr.error != null) ? 0 : 1
-      this.db
-        .query(
-          `INSERT INTO tool_calls (session_id, agent_id, tool_name, started_at, ended_at, success)
-           VALUES ($s, $a, $t, $ts, $ts, $ok)`,
-        )
-        .run({
-          $s: ev.session_id,
-          $a: ev.agent_id ?? null,
-          $t: p.tool_name ?? 'unknown',
-          $ts: ev.ts,
-          $ok: success,
-        })
+      this.stmtInsertToolCall.run({
+        $s: ev.session_id,
+        $a: ev.agent_id ?? null,
+        $t: p.tool_name ?? 'unknown',
+        $ts: ev.ts,
+        $ok: success,
+      })
     }
 
     const current = this.getSession(ev.session_id)
@@ -123,32 +150,19 @@ export class Aggregator {
 
   /** Look up a session by UUID or by human-readable name. */
   getSession(key: string): SessionRow | null {
-    const byId = this.db
-      .query<SessionRow, { $id: string }>('SELECT * FROM sessions WHERE session_id=$id')
-      .get({ $id: key })
+    const byId = this.stmtGetSessionById.get({ $id: key }) as SessionRow | null
     if (byId) return byId
-    const byName = this.db
-      .query<
-        SessionRow,
-        { $name: string }
-      >('SELECT * FROM sessions WHERE name=$name ORDER BY last_seen DESC LIMIT 1')
-      .get({ $name: key })
-    return byName ?? null
+    return (this.stmtGetSessionByName.get({ $name: key }) as SessionRow | null) ?? null
   }
 
   /** Accept either the session UUID or the session name. */
   getSubagents(sessionKey: string): SubagentRow[] {
     const resolved = this.getSession(sessionKey)
     const uuid = resolved?.session_id ?? sessionKey
-    return this.db
-      .query<
-        SubagentRow,
-        { $s: string }
-      >('SELECT * FROM subagents WHERE session_id=$s ORDER BY started_at DESC')
-      .all({ $s: uuid })
+    return this.stmtGetSubagents.all({ $s: uuid }) as SubagentRow[]
   }
 
   listSessions(): SessionRow[] {
-    return this.db.query<SessionRow, []>('SELECT * FROM sessions ORDER BY last_seen DESC').all()
+    return this.stmtListSessions.all() as SessionRow[]
   }
 }

@@ -44,9 +44,9 @@ if [[ -z "$SESSION_NAME" ]]; then
 fi
 SESSION_NAME="${SESSION_NAME:-unnamed}"
 
-SESSION_ID=$(echo "$PAYLOAD" | jq -r '.session_id // ""')
-AGENT_ID=$(echo "$PAYLOAD" | jq -r '.agent_id // ""')
-AGENT_TYPE=$(echo "$PAYLOAD" | jq -r '.agent_type // ""')
+IFS=$'\t' read -r SESSION_ID AGENT_ID AGENT_TYPE < <(
+  printf '%s' "$PAYLOAD" | jq -r '[.session_id // "", .agent_id // "", .agent_type // ""] | @tsv'
+)
 
 ENVELOPE=$(jq -n \
   --arg m "$MACHINE_ID" \

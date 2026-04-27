@@ -2,6 +2,19 @@ import { describe, expect, test, beforeEach } from 'bun:test'
 import { rmSync } from 'fs'
 import { openDb } from '../src/storage/db.js'
 import { Aggregator } from '../src/aggregator.js'
+import type { HookEvent } from '../src/events.js'
+
+function makeEvent(overrides: Partial<HookEvent> = {}): HookEvent {
+  return {
+    machine_id: 'test-machine',
+    session_name: 'test-session',
+    session_id: 'sess-uuid',
+    hook_event: 'UserPromptSubmit',
+    ts: new Date().toISOString(),
+    payload: {},
+    ...overrides,
+  }
+}
 
 const DB = '/tmp/party-line-agg-test.db'
 
@@ -39,7 +52,7 @@ describe('Aggregator', () => {
       session_name: 'w',
       session_id: 's',
       hook_event: 'SessionStart',
-      ts: 't1',
+      ts: '2026-04-20T10:00:00Z',
       payload: {},
     })
     agg.ingest({
@@ -47,7 +60,7 @@ describe('Aggregator', () => {
       session_name: 'w',
       session_id: 's',
       hook_event: 'PostToolUse',
-      ts: 't2',
+      ts: '2026-04-20T10:01:00Z',
       payload: { tool_name: 'Bash' },
     })
     expect(agg.getSession('s')?.state).toBe('working')
@@ -56,7 +69,7 @@ describe('Aggregator', () => {
       session_name: 'w',
       session_id: 's',
       hook_event: 'Stop',
-      ts: 't3',
+      ts: '2026-04-20T10:02:00Z',
       payload: {},
     })
     expect(agg.getSession('s')?.state).toBe('idle')
@@ -177,7 +190,7 @@ describe('Aggregator', () => {
       session_name: 'w',
       session_id: 's',
       hook_event: 'SessionStart',
-      ts: 't',
+      ts: '2026-04-20T10:00:00Z',
       payload: {},
     })
     expect(updates.length).toBe(1)
@@ -263,12 +276,14 @@ describe('Aggregator', () => {
   test('parent UserPromptSubmit cancels running subagents of that session', () => {
     const db = openDb(DB)
     const agg = new Aggregator(db)
+    const t1 = '2026-04-20T10:00:00Z'
+    const t2 = '2026-04-20T10:01:00Z'
     agg.ingest({
       machine_id: 'm',
       session_name: 'w',
       session_id: 's',
       hook_event: 'SubagentStart',
-      ts: 't1',
+      ts: t1,
       payload: {},
       agent_id: 'a1',
       agent_type: 'general-purpose',
@@ -278,24 +293,26 @@ describe('Aggregator', () => {
       session_name: 'w',
       session_id: 's',
       hook_event: 'UserPromptSubmit',
-      ts: 't2',
+      ts: t2,
       payload: {},
     })
     const subs = agg.getSubagents('s')
     expect(subs[0]!.status).toBe('cancelled')
-    expect(subs[0]!.ended_at).toBe('t2')
+    expect(subs[0]!.ended_at).toBe(t2)
     db.close()
   })
 
   test('parent SessionStart cancels stale running subagents of that session', () => {
     const db = openDb(DB)
     const agg = new Aggregator(db)
+    const t1 = '2026-04-20T10:00:00Z'
+    const t2 = '2026-04-20T10:01:00Z'
     agg.ingest({
       machine_id: 'm',
       session_name: 'w',
       session_id: 's',
       hook_event: 'SubagentStart',
-      ts: 't1',
+      ts: t1,
       payload: {},
       agent_id: 'a1',
       agent_type: 'Explore',
@@ -305,7 +322,7 @@ describe('Aggregator', () => {
       session_name: 'w',
       session_id: 's',
       hook_event: 'SessionStart',
-      ts: 't2',
+      ts: t2,
       payload: {},
     })
     expect(agg.getSubagents('s')[0]!.status).toBe('cancelled')
@@ -315,12 +332,14 @@ describe('Aggregator', () => {
   test('parent SessionEnd cancels running subagents of that session', () => {
     const db = openDb(DB)
     const agg = new Aggregator(db)
+    const t1 = '2026-04-20T10:00:00Z'
+    const t2 = '2026-04-20T10:01:00Z'
     agg.ingest({
       machine_id: 'm',
       session_name: 'w',
       session_id: 's',
       hook_event: 'SubagentStart',
-      ts: 't1',
+      ts: t1,
       payload: {},
       agent_id: 'a1',
       agent_type: 'Explore',
@@ -330,7 +349,7 @@ describe('Aggregator', () => {
       session_name: 'w',
       session_id: 's',
       hook_event: 'SessionEnd',
-      ts: 't2',
+      ts: t2,
       payload: {},
     })
     expect(agg.getSubagents('s')[0]!.status).toBe('cancelled')
@@ -381,12 +400,14 @@ describe('Aggregator', () => {
   test('cancellation only touches the session_id that fired, not other sessions', () => {
     const db = openDb(DB)
     const agg = new Aggregator(db)
+    const t1 = '2026-04-20T10:00:00Z'
+    const t2 = '2026-04-20T10:01:00Z'
     agg.ingest({
       machine_id: 'm',
       session_name: 'a',
       session_id: 's1',
       hook_event: 'SubagentStart',
-      ts: 't1',
+      ts: t1,
       payload: {},
       agent_id: 'a1',
       agent_type: 'Explore',
@@ -396,7 +417,7 @@ describe('Aggregator', () => {
       session_name: 'b',
       session_id: 's2',
       hook_event: 'SubagentStart',
-      ts: 't1',
+      ts: t1,
       payload: {},
       agent_id: 'a2',
       agent_type: 'Explore',
@@ -406,11 +427,57 @@ describe('Aggregator', () => {
       session_name: 'a',
       session_id: 's1',
       hook_event: 'UserPromptSubmit',
-      ts: 't2',
+      ts: t2,
       payload: {},
     })
     expect(agg.getSubagents('s1')[0]!.status).toBe('cancelled')
     expect(agg.getSubagents('s2')[0]!.status).toBe('running')
+    db.close()
+  })
+
+  test('subagents started within grace window are not cancelled on UserPromptSubmit', () => {
+    const db = openDb(DB)
+    const agg = new Aggregator(db)
+
+    const now = Date.now()
+    const recentTs = new Date(now - 2_000).toISOString() // 2s ago — within 10s grace
+    const staleTs = new Date(now - 15_000).toISOString() // 15s ago — outside grace
+    const promptTs = new Date(now).toISOString()
+
+    // Start the session first (well before the grace window)
+    agg.ingest(
+      makeEvent({
+        hook_event: 'SessionStart',
+        ts: new Date(now - 20_000).toISOString(),
+        session_id: 'sess-uuid',
+      }),
+    )
+
+    // Insert subagents directly with known started_at values
+    const insertSql =
+      'INSERT INTO subagents (agent_id, session_id, agent_type, description, started_at, status)' +
+      " VALUES ($agent_id, 'sess-uuid', null, null, $started_at, 'running')"
+    db.query(insertSql).run({ $agent_id: 'recent-agent', $started_at: recentTs })
+    db.query(insertSql).run({ $agent_id: 'stale-agent', $started_at: staleTs })
+
+    // Fire UserPromptSubmit at current time
+    agg.ingest(
+      makeEvent({
+        hook_event: 'UserPromptSubmit',
+        ts: promptTs,
+        session_id: 'sess-uuid',
+      }),
+    )
+
+    const agents = db
+      .query('SELECT agent_id, status FROM subagents ORDER BY agent_id')
+      .all() as Array<{ agent_id: string; status: string }>
+
+    const recent = agents.find((a) => a.agent_id === 'recent-agent')
+    const stale = agents.find((a) => a.agent_id === 'stale-agent')
+
+    expect(recent?.status).toBe('running') // NOT cancelled — within grace window
+    expect(stale?.status).toBe('cancelled') // correctly cancelled — outside grace
     db.close()
   })
 })

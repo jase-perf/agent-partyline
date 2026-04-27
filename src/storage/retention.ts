@@ -3,13 +3,23 @@ import { unlinkSync, rmdirSync } from 'fs'
 import { dirname } from 'path'
 import { deleteAttachment, listExpiredAttachments } from './attachments.js'
 
-/** Delete events older than `days` days. Returns number of rows deleted. */
+const CHUNK_SIZE = 1000
+
+/** Delete events older than `days` days in 1000-row batches. Returns total number of rows deleted. */
 export function pruneOldEvents(db: Database, days: number): number {
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
-  const result = db
-    .query<{ changes: number }, { $cutoff: string }>(`DELETE FROM events WHERE ts < $cutoff`)
-    .run({ $cutoff: cutoff }) as unknown as { changes: number }
-  return result.changes
+  const stmt = db.prepare(
+    `DELETE FROM events WHERE id IN (
+       SELECT id FROM events WHERE ts < $1 LIMIT ${CHUNK_SIZE}
+     )`,
+  )
+  let total = 0
+  while (true) {
+    const result = stmt.run(cutoff) as unknown as { changes: number }
+    total += result.changes
+    if (result.changes < CHUNK_SIZE) break
+  }
+  return total
 }
 
 /**

@@ -64,11 +64,13 @@ export class TranscriptIngester {
         } catch {
           continue
         }
+        const ts = extractTs(entry)
+        if (ts === null) continue
         insertEntry(this.db, {
           cc_session_uuid: ccUuid,
           seq,
           session_name: sessionName,
-          ts: extractTs(entry),
+          ts,
           kind: deriveKind(entry),
           uuid: extractUuid(entry),
           body_json: JSON.stringify(entry),
@@ -94,6 +96,8 @@ export class TranscriptIngester {
   }
 
   private handleUpdate(u: JsonlUpdate): void {
+    const ts = extractTs(u.entry)
+    if (ts === null) return
     const ccUuid = u.session_id
     const seq = this.allocateSeq(ccUuid)
     const sessionName = this.lookupSessionName(ccUuid)
@@ -101,7 +105,7 @@ export class TranscriptIngester {
       cc_session_uuid: ccUuid,
       seq,
       session_name: sessionName,
-      ts: extractTs(u.entry),
+      ts,
       kind: deriveKind(u.entry),
       uuid: extractUuid(u.entry),
       body_json: JSON.stringify(u.entry),
@@ -134,10 +138,10 @@ export class TranscriptIngester {
   }
 }
 
-function extractTs(entry: Record<string, unknown>): string {
+function extractTs(entry: Record<string, unknown>): string | null {
   if (typeof entry.timestamp === 'string') return entry.timestamp
   if (typeof entry.ts === 'string') return entry.ts
-  return new Date().toISOString()
+  return null
 }
 
 function extractUuid(entry: Record<string, unknown>): string | null {

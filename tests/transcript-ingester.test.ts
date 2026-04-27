@@ -69,9 +69,15 @@ describe('TranscriptIngester', () => {
     await observer.start()
     await new Promise((r) => setTimeout(r, 100))
 
-    appendFileSync(jsonl, JSON.stringify({ type: 'user', uuid: 'a' }) + '\n')
+    appendFileSync(
+      jsonl,
+      JSON.stringify({ type: 'user', uuid: 'a', timestamp: '2024-01-01T00:00:00Z' }) + '\n',
+    )
     await new Promise((r) => setTimeout(r, 150))
-    appendFileSync(jsonl, JSON.stringify({ type: 'user', uuid: 'b' }) + '\n')
+    appendFileSync(
+      jsonl,
+      JSON.stringify({ type: 'user', uuid: 'b', timestamp: '2024-01-01T00:00:01Z' }) + '\n',
+    )
     await new Promise((r) => setTimeout(r, 150))
 
     const rows = transcriptForUuid(db, 'uuid-2', 100)
@@ -90,7 +96,15 @@ describe('TranscriptIngester', () => {
 
     // Pad the first entry so the post-reset file is strictly smaller — the
     // JsonlObserver only fires onReset when stat size < previous size.
-    appendFileSync(jsonl, JSON.stringify({ type: 'user', uuid: 'a', pad: 'x'.repeat(200) }) + '\n')
+    appendFileSync(
+      jsonl,
+      JSON.stringify({
+        type: 'user',
+        uuid: 'a',
+        timestamp: '2024-01-01T00:00:00Z',
+        pad: 'x'.repeat(200),
+      }) + '\n',
+    )
     await new Promise((r) => setTimeout(r, 150))
     expect(transcriptForUuid(db, 'uuid-3', 10).length).toBe(1)
 
@@ -98,7 +112,10 @@ describe('TranscriptIngester', () => {
     writeFileSync(jsonl, '')
     await new Promise((r) => setTimeout(r, 150))
     // Now append the replacement content; observer treats it as a normal append.
-    appendFileSync(jsonl, JSON.stringify({ type: 'user', uuid: 'b' }) + '\n')
+    appendFileSync(
+      jsonl,
+      JSON.stringify({ type: 'user', uuid: 'b', timestamp: '2024-01-01T00:00:01Z' }) + '\n',
+    )
     await new Promise((r) => setTimeout(r, 200))
 
     const rows = transcriptForUuid(db, 'uuid-3', 10)
@@ -121,7 +138,10 @@ describe('TranscriptIngester', () => {
     await observer.start()
     await new Promise((r) => setTimeout(r, 100))
 
-    appendFileSync(jsonl, JSON.stringify({ type: 'user', uuid: 'x' }) + '\n')
+    appendFileSync(
+      jsonl,
+      JSON.stringify({ type: 'user', uuid: 'x', timestamp: '2024-01-01T00:00:00Z' }) + '\n',
+    )
     await new Promise((r) => setTimeout(r, 200))
 
     const rows = transcriptForUuid(db, 'uuid-4', 10)
@@ -134,11 +154,26 @@ describe('TranscriptIngester', () => {
     const jsonl = join(cwd, 'stranger-uuid.jsonl')
     writeFileSync(
       jsonl,
-      JSON.stringify({ type: 'user', uuid: 'h1', text: 'past 1' }) +
+      JSON.stringify({
+        type: 'user',
+        uuid: 'h1',
+        text: 'past 1',
+        timestamp: '2024-01-01T00:00:00Z',
+      }) +
         '\n' +
-        JSON.stringify({ type: 'assistant', uuid: 'h2', text: 'past 2' }) +
+        JSON.stringify({
+          type: 'assistant',
+          uuid: 'h2',
+          text: 'past 2',
+          timestamp: '2024-01-01T00:00:01Z',
+        }) +
         '\n' +
-        JSON.stringify({ type: 'user', uuid: 'h3', text: 'past 3' }) +
+        JSON.stringify({
+          type: 'user',
+          uuid: 'h3',
+          text: 'past 3',
+          timestamp: '2024-01-01T00:00:02Z',
+        }) +
         '\n',
     )
     const ingester = new TranscriptIngester(db, projectsRoot)
@@ -177,5 +212,65 @@ describe('TranscriptIngester', () => {
     const ingester = new TranscriptIngester(db, projectsRoot)
     expect(ingester.backfillFromUuid('does-not-exist')).toBe(0)
     expect(transcriptForUuid(db, 'does-not-exist', 10).length).toBe(0)
+  })
+
+  test('entries without timestamp are skipped (not fabricated)', async () => {
+    const cwd = join(projectsRoot, 'p-no-ts')
+    mkdirSync(cwd, { recursive: true })
+    const uuid = 'uuid-no-ts'
+    const jsonl = join(cwd, `${uuid}.jsonl`)
+    writeFileSync(jsonl, '')
+    const ingester = new TranscriptIngester(db, projectsRoot)
+    ingester.subscribe(observer)
+    await observer.start()
+    await new Promise((r) => setTimeout(r, 100))
+
+    appendFileSync(jsonl, JSON.stringify({ type: 'user', content: 'hello' }) + '\n')
+    await new Promise((r) => setTimeout(r, 200))
+
+    const rows = transcriptForUuid(db, uuid, 100)
+    expect(rows).toHaveLength(0) // must be skipped, not inserted with fabricated ts
+  })
+
+  test('entries with timestamp are inserted', async () => {
+    const cwd = join(projectsRoot, 'p-with-ts')
+    mkdirSync(cwd, { recursive: true })
+    const uuid = 'uuid-with-ts'
+    const jsonl = join(cwd, `${uuid}.jsonl`)
+    writeFileSync(jsonl, '')
+    const ingester = new TranscriptIngester(db, projectsRoot)
+    ingester.subscribe(observer)
+    await observer.start()
+    await new Promise((r) => setTimeout(r, 100))
+
+    appendFileSync(
+      jsonl,
+      JSON.stringify({ type: 'user', timestamp: '2024-01-01T00:00:00Z', content: 'hi' }) + '\n',
+    )
+    await new Promise((r) => setTimeout(r, 200))
+
+    const rows = transcriptForUuid(db, uuid, 100)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.ts).toBe('2024-01-01T00:00:00Z')
+  })
+
+  test('backfillFromUuid skips entries without timestamp', () => {
+    const cwd = join(projectsRoot, 'p-backfill-no-ts')
+    mkdirSync(cwd, { recursive: true })
+    const uuid = 'uuid-backfill-no-ts'
+    const jsonl = join(cwd, `${uuid}.jsonl`)
+    writeFileSync(
+      jsonl,
+      JSON.stringify({ type: 'user', content: 'no-ts' }) +
+        '\n' +
+        JSON.stringify({ type: 'user', timestamp: '2024-01-01T00:00:00Z', content: 'has-ts' }) +
+        '\n',
+    )
+    const ingester = new TranscriptIngester(db, projectsRoot)
+    const inserted = ingester.backfillFromUuid(uuid)
+    expect(inserted).toBe(1) // only the one with a timestamp
+    const rows = transcriptForUuid(db, uuid, 10)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.ts).toBe('2024-01-01T00:00:00Z')
   })
 })
