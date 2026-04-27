@@ -185,7 +185,6 @@ fetch('/api/self')
     localMachineId = data.machine_id
   })
   .catch(() => {})
-let selectedSessionId = null
 let selectedAgentId = null
 let selectedArchiveUuid = null
 let currentSessionSubagents = []
@@ -299,9 +298,9 @@ function renderView(view) {
   }
   // Run view-specific init
   if (view === 'history') loadHistoryView()
-  if (view === 'session-detail' && selectedSessionId) {
-    markSessionViewed(selectedSessionId)
-    unreadCounts[selectedSessionId] = 0
+  if (view === 'session-detail' && focusedTabName) {
+    markSessionViewed(focusedTabName)
+    unreadCounts[focusedTabName] = 0
     updateSessions(lastSessions)
     loadSessionDetailView()
   }
@@ -544,7 +543,7 @@ function setContextLimit(sessionName, value) {
   })
   contextOverrides[sessionName] = { contextLimit: value }
   if (typeof updateSessions === 'function') updateSessions(lastSessions)
-  if (selectedSessionId === sessionName && typeof renderDetailHeader === 'function') {
+  if (focusedTabName === sessionName && typeof renderDetailHeader === 'function') {
     for (var i = 0; i < lastSessions.length; i++) {
       if (lastSessions[i].name === sessionName) {
         renderDetailHeader(lastSessions[i])
@@ -795,7 +794,7 @@ function handleSessionRemoved(name) {
   }
 
   // If currently viewing this session's detail, bounce back to switchboard.
-  if (currentView === 'session-detail' && selectedSessionId === name) {
+  if (focusedTabName === name) {
     navigate({ view: 'switchboard' })
   }
 }
@@ -884,10 +883,10 @@ function handleSessionRemoved(name) {
 // Kebab on the session-detail header.
 document.getElementById('detail-actions')?.addEventListener('click', (ev) => {
   ev.stopPropagation()
-  if (!selectedSessionId) return
+  if (!focusedTabName) return
   const btn = ev.currentTarget
   const r = btn.getBoundingClientRect()
-  showSessionActionsMenu(selectedSessionId, r.left, r.bottom + 4)
+  showSessionActionsMenu(focusedTabName, r.left, r.bottom + 4)
 })
 
 // Close ctx-menu on Escape.
@@ -1046,7 +1045,7 @@ function applySessionDelta(delta) {
     })
     syncStripFromSessions(stripSessions)
   }
-  if (currentView === 'session-detail' && selectedSessionId === delta.session) {
+  if (focusedTabName === delta.session) {
     try {
       if (typeof renderDetailHeader === 'function') renderDetailHeader(row)
     } catch (err) {
@@ -1668,9 +1667,9 @@ function handleSessionUpdate(session) {
   }
 
   // Live-patch the session detail view when the viewed session receives an update
-  if (currentView === 'session-detail' && session && session.name === selectedSessionId) {
+  if (session && session.name === focusedTabName) {
     renderDetailHeader(session)
-    fetch('/api/session?id=' + encodeURIComponent(selectedSessionId))
+    fetch('/api/session?id=' + encodeURIComponent(focusedTabName))
       .then((r) => r.json())
       .then((data) => {
         currentSessionSubagents = data.subagents || []
@@ -1727,7 +1726,7 @@ function handleUserPromptLive(data, rootOverride) {
   // Also update the global focused-session path so renderedEntryKeys stays in
   // sync for the incremental dedup in renderStream (used when the JSONL fetch
   // later arrives with the same entry).
-  if (data.session_name === selectedSessionId) {
+  if (data.session_name === focusedTabName) {
     renderedEntryKeys.add(textKey)
     renderedEntryKeys.add(entry.uuid)
   }
@@ -1760,7 +1759,7 @@ function handleJsonlEvent(update) {
       // Focused tab: use the existing global renderStream path so its
       // incremental cursor (lastRenderedUuid, renderedEntryKeys) stays correct.
       const agentMatches = selectedAgentId && sessionId === selectedAgentId
-      if (sessionName === selectedSessionId || sessionId === selectedSessionId || agentMatches) {
+      if (sessionName === focusedTabName || sessionId === focusedTabName || agentMatches) {
         renderStream({ incremental: true })
       }
     } else {
@@ -1778,11 +1777,11 @@ function handleJsonlEvent(update) {
  * transcript re-fetch so the client doesn't display stale or gap content.
  */
 function handleStreamReset(data) {
-  if (currentView !== 'session-detail' || !selectedSessionId) return
+  if (!focusedTabName) return
   if (!data || !data.file_path) return
   const sessionName = resolveNameFromJsonlPath(data.file_path)
   const sessionId = (data.file_path.match(/\/([0-9a-f-]+)\.jsonl$/) || [])[1]
-  if (sessionName !== selectedSessionId && sessionId !== selectedSessionId) return
+  if (sessionName !== focusedTabName && sessionId !== focusedTabName) return
   renderStream({ force: true })
 }
 
@@ -1799,11 +1798,11 @@ function maybeHandleCompactForCurrentView(evPayload) {
   if (evPayload.hook_event !== 'SessionStart') return
   const payload = evPayload.payload
   if (!payload || payload.source !== 'compact') return
-  if (currentView !== 'session-detail' || !selectedSessionId) return
+  if (!focusedTabName) return
 
   // Match by session UUID or session name (whichever the event carries).
-  const matchesId = evPayload.session_id && evPayload.session_id === selectedSessionId
-  const matchesName = evPayload.session_name && evPayload.session_name === selectedSessionId
+  const matchesId = evPayload.session_id && evPayload.session_id === focusedTabName
+  const matchesName = evPayload.session_name && evPayload.session_name === focusedTabName
   if (!matchesId && !matchesName) return
 
   // Compaction rewrites the JSONL — our lastRenderedUuid is now stale.
@@ -1818,19 +1817,19 @@ function maybeHandleCompactForCurrentView(evPayload) {
  * @param {HTMLElement | null} [rootOverride]
  */
 function appendEnvelopeToStream(envelope, rootOverride) {
-  if (!envelope || !selectedSessionId) return
+  if (!envelope || !focusedTabName) return
   // Skip protocol-level chatter — users never want to see these in a session view.
   if (envelope.type === 'heartbeat' || envelope.type === 'announce') return
   const root = rootOverride || document.getElementById('detail-stream')
   if (!root) return
   const key = envelope.id
   if (renderedEntryKeys.has(key)) return
-  const isSent = envelope.from === selectedSessionId
+  const isSent = envelope.from === focusedTabName
   // When the user sends a message from the dashboard's session-detail send box,
   // the envelope comes back as from="dashboard" → viewed session. Render it as
   // a "you:" user entry so it matches how it'll look after a refresh (the
   // recipient's JSONL records the incoming channel message as a user turn).
-  const fromDashboardToSelf = envelope.from === 'dashboard' && envelope.to === selectedSessionId
+  const fromDashboardToSelf = envelope.from === 'dashboard' && envelope.to === focusedTabName
   let entry
   if (fromDashboardToSelf) {
     entry = {
@@ -2080,7 +2079,7 @@ function populateDetailHeader(session) {
   if (!session) {
     stateEl.textContent = ''
     stateEl.className = 'state-pill'
-    if (nameEl) nameEl.textContent = selectedSessionId || ''
+    if (nameEl) nameEl.textContent = focusedTabName || ''
     if (cwdEl) cwdEl.textContent = ''
     if (modelEl) modelEl.textContent = ''
     if (ctxEl) ctxEl.textContent = ''
@@ -2106,9 +2105,9 @@ function populateDetailHeader(session) {
 }
 
 function updateDetailHeader(session) {
-  if (!session || !selectedSessionId) return
+  if (!session || !focusedTabName) return
   var sessionKey = session.session_id || session.session_name
-  if (sessionKey !== selectedSessionId) return
+  if (sessionKey !== focusedTabName) return
   populateDetailHeader(session)
 }
 
@@ -2168,7 +2167,7 @@ function scopedById(scope, id) {
  */
 async function loadSessionDetailView(opts) {
   opts = opts || {}
-  const sessionKey = opts.sessionKey ?? selectedSessionId
+  const sessionKey = opts.sessionKey ?? focusedTabName
   if (!sessionKey) return
   const agentId = opts.agentId ?? selectedAgentId
   const archiveUuid = opts.archiveUuid ?? selectedArchiveUuid
@@ -2187,10 +2186,6 @@ async function loadSessionDetailView(opts) {
   // session's transcript and sidebar agents under the new session's header.
   resetDetailViewForSwitch(root)
 
-  // When rendering into an isolated per-tab clone (contentRoot is set) we
-  // don't guard on selectedSessionId — the clone is tab-owned and can't
-  // show stale data from a different session. The guard only applies when
-  // rendering into the shared document-level view.
   const isIsolated = !!opts.contentRoot
   const tab = isIsolated ? tabRegistry.get(sessionKey) : null
   try {
@@ -2198,7 +2193,7 @@ async function loadSessionDetailView(opts) {
     const data = await r.json()
     // The user may have navigated to a different session by the time this
     // resolves — drop the response if the selection has moved on.
-    if (!isIsolated && selectedSessionId !== sessionKey) return
+    if (!isIsolated && focusedTabName !== sessionKey) return
     const subs = data.subagents || []
     if (tab) tab.subagents = subs
     if (!isIsolated || focusedTabName === sessionKey) currentSessionSubagents = subs
@@ -2208,7 +2203,7 @@ async function loadSessionDetailView(opts) {
     console.warn('session fetch failed', e)
   }
 
-  if (!isIsolated && selectedSessionId !== sessionKey) return
+  if (!isIsolated && focusedTabName !== sessionKey) return
   renderHistorySidebar(sessionKey, archiveUuid, root)
 
   // agentId is set by the router before loadSessionDetailView is called;
@@ -2298,7 +2293,7 @@ function renderDetailHeader(session, scope) {
 
   // Fall back to multicast status for ctx/model since the aggregator's
   // sessions table doesn't capture those from hook payloads.
-  const name = session.name || selectedSessionId
+  const name = session.name || focusedTabName
   const multicast = (lastSessions || []).find((x) => x.name === name)
   const st = multicast && multicast.metadata && multicast.metadata.status
 
@@ -2353,7 +2348,7 @@ function renderDetailHeader(session, scope) {
     lastEl.title = snippet
   }
 
-  updateDetailBell(session.name || selectedSessionId)
+  updateDetailBell(session.name || focusedTabName)
 }
 
 function updateDetailBell(sessionName) {
@@ -2387,7 +2382,7 @@ function renderAgentTree(scope) {
   if (!selectedAgentId) mainLi.classList.add('active')
   mainLi.addEventListener('click', () => {
     selectedAgentId = null
-    navigate({ view: 'session-detail', sessionName: selectedSessionId, agentId: null })
+    navigate({ view: 'session-detail', sessionName: focusedTabName, agentId: null })
     const sidebar = document.getElementById('detail-sidebar')
     if (sidebar) sidebar.classList.remove('open')
   })
@@ -2454,7 +2449,7 @@ function buildAgentLi(sa) {
   li.addEventListener('click', (e) => {
     e.stopPropagation() // don't bubble up and toggle the parent details group
     selectedAgentId = sa.agent_id
-    navigate({ view: 'session-detail', sessionName: selectedSessionId, agentId: sa.agent_id })
+    navigate({ view: 'session-detail', sessionName: focusedTabName, agentId: sa.agent_id })
     const sidebar = document.getElementById('detail-sidebar')
     if (sidebar) sidebar.classList.remove('open')
   })
@@ -2523,7 +2518,7 @@ async function renderStream(opts) {
   // branch lights the existing single-session path.
   const root = opts.root || document.getElementById('detail-stream')
   if (!root) return
-  const sessionKey = opts.sessionKey ?? selectedSessionId
+  const sessionKey = opts.sessionKey ?? focusedTabName
   const agentId = opts.agentId ?? selectedAgentId
   const archiveUuid = opts.archiveUuid ?? selectedArchiveUuid
   if (!sessionKey) {
@@ -3209,12 +3204,11 @@ function addFiles(fileList) {
  */
 function doDetailSend(form) {
   // Per-tab clones have a .session-tab-content[data-tab-name="X"] wrapper;
-  // derive the target session from there. selectedSessionId is null in the
-  // tab-driven world (only the legacy single-tab path set it), so reading
-  // it as the source-of-truth would silently bail every send.
+  // derive the target session from there, falling back to focusedTabName for
+  // the (rare) case of a form not inside a per-tab content wrapper.
   const tabContent = form.closest('.session-tab-content')
   const targetName =
-    (tabContent instanceof HTMLElement && tabContent.dataset.tabName) || selectedSessionId
+    (tabContent instanceof HTMLElement && tabContent.dataset.tabName) || focusedTabName
   if (!targetName) return
   const textarea = /** @type {HTMLTextAreaElement | null} */ (
     form.querySelector('#detail-send-msg, [data-orig-id="detail-send-msg"]')
@@ -3533,7 +3527,7 @@ document.getElementById('detail-stream').addEventListener('click', (e) => {
     e.preventDefault()
     navigate({
       view: 'session-detail',
-      sessionName: selectedSessionId,
+      sessionName: focusedTabName,
       agentId: viewAgentBtn.dataset.agentId,
     })
     return
@@ -4346,8 +4340,7 @@ document.getElementById('detail-bell')?.addEventListener('click', (ev) => {
 // --- Permission request cards ---
 
 function renderPermissionCard(data) {
-  if (currentView !== 'session-detail') return
-  if (selectedSessionId !== data.session) return
+  if (!focusedTabName) return
   const stream = document.getElementById('detail-stream')
   if (!stream) return
 
@@ -4461,8 +4454,8 @@ function updatePermissionCardResolved(data) {
 // Also refresh permission state in case it changed in another tab.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return
-  if (currentView !== 'session-detail' || !selectedSessionId) return
-  notif.dispatchSessionViewed(selectedSessionId)
+  if (!focusedTabName) return
+  notif.dispatchSessionViewed(focusedTabName)
   refreshNotifState()
 })
 
