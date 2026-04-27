@@ -37,7 +37,7 @@ import { recentEvents } from '../src/storage/queries.js'
 import {
   listSessions as listCcplSessions,
   getSessionByName as getCcplSessionByName,
-  getSessionByToken as getCcplSessionByToken,
+  findSessionByTokenSafe as findCcplSessionByTokenSafe,
   messagesForSession,
 } from '../src/storage/ccpl-queries.js'
 import {
@@ -428,7 +428,7 @@ function isAuthed(req: Request): boolean {
 function resolveUploader(req: Request, db: import('bun:sqlite').Database): string | null {
   const token = req.headers.get('x-party-line-token')
   if (token) {
-    const row = getCcplSessionByToken(db, token)
+    const row = findCcplSessionByTokenSafe(db, token)
     if (row) return row.name
   }
   if (isAuthed(req)) return 'dashboard'
