@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 
 export interface CcplSessionRow {
   name: string
@@ -72,6 +72,35 @@ export function getSessionByName(db: Database, name: string): CcplSessionRow | n
 export function getSessionByToken(db: Database, token: string): CcplSessionRow | null {
   const row = db.query(`SELECT * FROM ccpl_sessions WHERE token = ?`).get(token)
   return row ? rowToSession(row) : null
+}
+
+/**
+ * Constant-time token lookup. Fetches every row's token and compares with
+ * timingSafeEqual; defeats the timing side-channel that SQL `WHERE token = ?`
+ * leaks. With O(N) rows in practice, the cost is negligible.
+ *
+ * Returns null on no-match — caller cannot distinguish "no such token" from
+ * "valid format but unknown" by timing.
+ */
+export function findSessionByTokenSafe(db: Database, token: string): CcplSessionRow | null {
+  const candidate = Buffer.from(token)
+  // Fetch all (name, token) pairs, then re-fetch the row by name on match.
+  // We can't compare hex strings of different lengths with timingSafeEqual,
+  // so we pre-pad to a fixed length (token is always 64 chars hex from
+  // generateToken; if a stored row has a different length, it's not a match).
+  const rows = db.query(`SELECT name, token FROM ccpl_sessions`).all() as {
+    name: string
+    token: string
+  }[]
+  let matchName: string | null = null
+  for (const row of rows) {
+    const stored = Buffer.from(row.token)
+    if (stored.length !== candidate.length) continue
+    if (timingSafeEqual(stored, candidate)) matchName = row.name
+    // do NOT break — keep iterating to keep the timing constant w.r.t. position
+  }
+  if (!matchName) return null
+  return getSessionByName(db, matchName)
 }
 
 export function getSessionByCcUuid(db: Database, ccUuid: string): CcplSessionRow | null {

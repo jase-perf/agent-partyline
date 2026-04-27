@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import {
   registerSession,
   getSessionByName,
-  getSessionByToken,
+  findSessionByTokenSafe,
   listSessions,
   rotateToken,
   deleteSession,
@@ -47,7 +47,7 @@ export async function handleCcplRegister(req: Request, db: Database): Promise<Re
 function authBearer(req: Request, db: Database): { name: string } | null {
   const token = req.headers.get('x-party-line-token')
   if (!token) return null
-  const row = getSessionByToken(db, token)
+  const row = findSessionByTokenSafe(db, token)
   return row ? { name: row.name } : null
 }
 

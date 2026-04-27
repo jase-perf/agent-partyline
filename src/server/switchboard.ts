@@ -2,8 +2,8 @@ import type { Database } from 'bun:sqlite'
 import type { ServerWebSocket } from 'bun'
 import { randomBytes } from 'node:crypto'
 import {
-  getSessionByToken,
   getSessionByName,
+  findSessionByTokenSafe,
   updateSessionOnConnect,
   markSessionOffline,
   archiveSession,
@@ -212,7 +212,7 @@ export function createSwitchboard(db: Database, opts: SwitchboardOpts = {}): Swi
   return {
     reconcileCcSessionUuid,
     handleSessionHello(ws, frame) {
-      const row = getSessionByToken(db, frame.token)
+      const row = findSessionByTokenSafe(db, frame.token)
       if (!row) return { ok: false, error: 'invalid_token', code: 4401 }
       if (row.name !== frame.name) return { ok: false, error: 'name_mismatch', code: 4401 }
 

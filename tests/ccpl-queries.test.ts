@@ -5,6 +5,7 @@ import {
   registerSession,
   getSessionByName,
   getSessionByToken,
+  findSessionByTokenSafe,
   listSessions,
   updateSessionOnConnect,
   markSessionOffline,
@@ -183,6 +184,25 @@ describe('ccpl-queries', () => {
     const list = listSessions(db)
     expect(list[0]!.name).toBe('b')
     expect(list[0]!.online).toBe(true)
+    cleanup()
+  })
+
+  test('findSessionByTokenSafe returns row on exact match', () => {
+    const row = registerSession(db, 'alice', '/tmp')
+    const found = findSessionByTokenSafe(db, row.token)
+    expect(found?.name).toBe('alice')
+    cleanup()
+  })
+
+  test('findSessionByTokenSafe returns null on mismatch', () => {
+    registerSession(db, 'alice', '/tmp')
+    expect(findSessionByTokenSafe(db, 'a'.repeat(64))).toBe(null)
+    cleanup()
+  })
+
+  test('findSessionByTokenSafe returns null on length mismatch', () => {
+    registerSession(db, 'alice', '/tmp')
+    expect(findSessionByTokenSafe(db, 'short')).toBe(null)
     cleanup()
   })
 
