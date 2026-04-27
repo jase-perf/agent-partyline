@@ -2,7 +2,7 @@ import { test, expect, describe } from 'bun:test'
 import { readFileSync, statSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 // @ts-expect-error - JS module without types
-import { notificationRouteFromData } from '../dashboard/sw-routes.js'
+import { notificationRouteFromData } from '../dashboard/sw.js'
 
 const DASHBOARD = resolve(import.meta.dir, '..', 'dashboard')
 

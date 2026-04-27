@@ -34,8 +34,10 @@ var sessionRevisions = new Map() // name -> last applied revision (from /ws/obse
 let swRegistration = null
 
 if ('serviceWorker' in navigator) {
+  // Register as a module so sw.js can `export` notificationRouteFromData for
+  // unit tests. Chrome 80+, Safari 15.4+, Firefox 113+ all support this.
   swRegistration = navigator.serviceWorker
-    .register('/sw.js', { scope: '/' })
+    .register('/sw.js', { scope: '/', type: 'module' })
     .then((reg) => reg)
     .catch((err) => {
       console.error('[sw] registration failed:', err)
