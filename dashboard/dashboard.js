@@ -101,6 +101,7 @@ let sessionActiveSubagents = {} // session name -> count of active subagents
  *   lastViewedAt: number,
  *   online: boolean,
  *   evictionTimer: ReturnType<typeof setTimeout> | null,
+ *   pendingAttachments: Array<{id: string|null, localId?: string, name: string, size: number, kind: string, media_type: string, url: string|null, objectUrl?: string, status: 'uploading'|'ready'|'error'}>,
  * }} Tab
  */
 
@@ -3103,24 +3104,20 @@ function closeLightbox() {
   })
 })()
 
-// Pending attachments per send-form. Each is { id, name, size, kind, media_type, url, objectUrl?, status }.
-let pendingAttachments = []
+// Pending attachments live on each Tab (tab.pendingAttachments).
+// Each is { id, name, size, kind, media_type, url, objectUrl?, status }.
 
-function renderAttachChips() {
-  // Scope to the focused tab's clone — the global #detail-attach-chips
-  // lives in the hidden template and isn't visible to the user.
-  const tab = tabRegistry.get(focusedTabName)
-  const wrap =
-    (tab && tab.contentEl && scopedById(tab.contentEl, 'detail-attach-chips')) ||
-    document.getElementById('detail-attach-chips')
+function renderAttachChips(tab) {
+  if (!tab || !tab.contentEl) return
+  const wrap = scopedById(tab.contentEl, 'detail-attach-chips')
   if (!wrap) return
   wrap.replaceChildren()
-  if (pendingAttachments.length === 0) {
+  if (tab.pendingAttachments.length === 0) {
     wrap.hidden = true
     return
   }
   wrap.hidden = false
-  for (const p of pendingAttachments) {
+  for (const p of tab.pendingAttachments) {
     const chip = document.createElement('span')
     chip.className =
       'attach-chip' +
@@ -3145,16 +3142,16 @@ function renderAttachChips() {
     x.className = 'attach-chip-x'
     x.textContent = '×'
     x.addEventListener('click', () => {
-      pendingAttachments = pendingAttachments.filter((q) => q !== p)
+      tab.pendingAttachments = tab.pendingAttachments.filter((q) => q !== p)
       if (p.objectUrl) URL.revokeObjectURL(p.objectUrl)
-      renderAttachChips()
+      renderAttachChips(tab)
     })
     chip.appendChild(x)
     wrap.appendChild(chip)
   }
 }
 
-async function uploadPending(file) {
+async function uploadPending(tab, file) {
   const localId = Math.random().toString(36).slice(2)
   const placeholder = {
     localId,
@@ -3167,8 +3164,8 @@ async function uploadPending(file) {
     url: null,
     status: 'uploading',
   }
-  pendingAttachments.push(placeholder)
-  renderAttachChips()
+  tab.pendingAttachments.push(placeholder)
+  renderAttachChips(tab)
   try {
     const form = new FormData()
     form.append('file', file, placeholder.name)
@@ -3185,17 +3182,18 @@ async function uploadPending(file) {
     placeholder.status = 'error'
     console.error('[attach] upload failed', err)
   } finally {
-    renderAttachChips()
+    renderAttachChips(tab)
   }
 }
 
-function addFiles(fileList) {
+function addFiles(tab, fileList) {
+  if (!tab) return
   for (const f of Array.from(fileList)) {
-    if (pendingAttachments.length >= 5) {
+    if (tab.pendingAttachments.length >= 5) {
       console.warn('[attach] max 5 attachments; ignoring', f.name)
       break
     }
-    uploadPending(f)
+    uploadPending(tab, f)
   }
 }
 
@@ -3210,14 +3208,16 @@ function doDetailSend(form) {
   const targetName =
     (tabContent instanceof HTMLElement && tabContent.dataset.tabName) || focusedTabName
   if (!targetName) return
+  const tab = tabRegistry.get(targetName)
+  if (!tab) return
   const textarea = /** @type {HTMLTextAreaElement | null} */ (
     form.querySelector('#detail-send-msg, [data-orig-id="detail-send-msg"]')
   )
   if (!textarea) return
   const msg = textarea.value.trim()
-  const readyAtts = pendingAttachments.filter((p) => p.status === 'ready' && p.id)
+  const readyAtts = tab.pendingAttachments.filter((p) => p.status === 'ready' && p.id)
   if (!msg && readyAtts.length === 0) return
-  const uploading = pendingAttachments.some((p) => p.status === 'uploading')
+  const uploading = tab.pendingAttachments.some((p) => p.status === 'uploading')
   if (uploading) {
     // Let the upload finish first — user can retry Send.
     console.warn('[detail-send] waiting for uploads')
@@ -3240,9 +3240,9 @@ function doDetailSend(form) {
   autosizeDetailSend(textarea)
   textarea.focus()
   // Clear chips (revoke object URLs).
-  for (const p of pendingAttachments) if (p.objectUrl) URL.revokeObjectURL(p.objectUrl)
-  pendingAttachments = []
-  renderAttachChips()
+  for (const p of tab.pendingAttachments) if (p.objectUrl) URL.revokeObjectURL(p.objectUrl)
+  tab.pendingAttachments = []
+  renderAttachChips(tab)
 }
 
 /**
@@ -3280,7 +3280,7 @@ function autosizeDetailSend(ta) {
   if (btn && input) {
     btn.addEventListener('click', () => input.click())
     input.addEventListener('change', () => {
-      if (input.files && input.files.length > 0) addFiles(input.files)
+      if (input.files && input.files.length > 0) addFiles(currentTab(), input.files)
       input.value = ''
     })
   }
@@ -3297,7 +3297,7 @@ function autosizeDetailSend(ta) {
       }
     if (files.length > 0) {
       e.preventDefault()
-      addFiles(files)
+      addFiles(currentTab(), files)
     }
   })
 
@@ -3326,7 +3326,7 @@ function autosizeDetailSend(ta) {
       depth = 0
       form.classList.remove('drop-target')
       const files = e.dataTransfer?.files
-      if (files && files.length > 0) addFiles(files)
+      if (files && files.length > 0) addFiles(currentTab(), files)
     })
   }
 })()
@@ -3596,6 +3596,7 @@ function ensureSwitchboardTabRegistered() {
     lastViewedAt: Date.now(),
     online: true,
     evictionTimer: null,
+    pendingAttachments: [],
   }
   tabRegistry.set('', home)
   focusedTabName = ''
@@ -3611,6 +3612,9 @@ function ensureSwitchboardTabRegistered() {
 function wireTabFormHandlers(contentEl) {
   const clonedForm = contentEl.querySelector('[data-orig-id="detail-send"]')
   if (!(clonedForm instanceof HTMLFormElement)) return
+  // Tab for this clone is derived from contentEl.dataset.tabName at event time
+  // (registry lookup, not capture, so re-mount/eviction is handled correctly).
+  const tabForEl = () => tabRegistry.get(contentEl.dataset.tabName || '') || null
   clonedForm.addEventListener('submit', (e) => {
     e.preventDefault()
     doDetailSend(clonedForm)
@@ -3635,7 +3639,7 @@ function wireTabFormHandlers(contentEl) {
     clonedAttachBtn.addEventListener('click', () => clonedAttachInput.click())
     clonedAttachInput.addEventListener('change', () => {
       if (clonedAttachInput.files && clonedAttachInput.files.length > 0)
-        addFiles(clonedAttachInput.files)
+        addFiles(tabForEl(), clonedAttachInput.files)
       clonedAttachInput.value = ''
     })
   }
@@ -3651,7 +3655,7 @@ function wireTabFormHandlers(contentEl) {
         }
       if (files.length > 0) {
         e.preventDefault()
-        addFiles(files)
+        addFiles(tabForEl(), files)
       }
     })
   }
@@ -3675,7 +3679,7 @@ function wireTabFormHandlers(contentEl) {
     dropDepth = 0
     clonedForm.classList.remove('drop-target')
     const files = e.dataTransfer?.files
-    if (files && files.length > 0) addFiles(files)
+    if (files && files.length > 0) addFiles(tabForEl(), files)
   })
 
   // Scroll-to-bottom button + stream-scroll listener — per-tab clone
@@ -3771,6 +3775,7 @@ function pinTab(name) {
     lastViewedAt: 0, // 0 = never focused, won't be picked by LRU
     online: false,
     evictionTimer: null,
+    pendingAttachments: [],
   }
   tabRegistry.set(name, tab)
   return tab
