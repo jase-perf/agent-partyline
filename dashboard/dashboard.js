@@ -355,6 +355,7 @@ function connect() {
     }
     connStatus.textContent = 'reconnecting\u2026'
     connStatus.style.color = 'var(--yellow)'
+    sessionsReady = false
     setTimeout(connect, 2000)
   }
 
@@ -1003,9 +1004,9 @@ function handleSessionsSnapshot(sessions) {
       },
     }
   })
-  sessionRevisions.clear()
   sessions.forEach(function (s) {
-    sessionRevisions.set(s.name, s.revision)
+    const prior = sessionRevisions.has(s.name) ? sessionRevisions.get(s.name) : -1
+    sessionRevisions.set(s.name, Math.max(prior, s.revision))
   })
   syncStripFromSessions(sessions)
   updateSessions(adapted)
