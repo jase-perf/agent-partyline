@@ -34,12 +34,37 @@ export interface PermissionBridge {
   hasPending: (requestId: string) => boolean
 }
 
+const PENDING_TTL_MS = 5 * 60 * 1000 // 5 min — Claude Code permission timeout
+const PENDING_CAP = 256
+
+interface PendingEntry {
+  params: PermissionRequestParams
+  expiresAt: number
+}
+
 export function createPermissionBridge(deps: PermissionBridgeDeps): PermissionBridge {
-  const pending = new Map<string, PermissionRequestParams>()
+  const pending = new Map<string, PendingEntry>()
+
+  function evictExpired(): void {
+    const now = Date.now()
+    for (const [id, entry] of pending) {
+      if (entry.expiresAt < now) pending.delete(id)
+    }
+  }
+
+  function evictToCap(): void {
+    if (pending.size <= PENDING_CAP) return
+    // Drop oldest entries until under cap.
+    const sorted = [...pending.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt)
+    const drop = pending.size - PENDING_CAP
+    for (let i = 0; i < drop; i++) pending.delete(sorted[i]![0])
+  }
 
   return {
     handlePermissionRequest(params) {
-      pending.set(params.request_id, params)
+      evictExpired()
+      pending.set(params.request_id, { params, expiresAt: Date.now() + PENDING_TTL_MS })
+      evictToCap()
       const body = JSON.stringify(params)
       const envelope = createEnvelope(deps.sessionName, 'dashboard', 'permission-request', body)
       deps.sendEnvelope(envelope)
@@ -54,13 +79,22 @@ export function createPermissionBridge(deps: PermissionBridgeDeps): PermissionBr
         return
       }
       if (parsed.behavior !== 'allow' && parsed.behavior !== 'deny') return
-      if (!pending.has(parsed.request_id)) return
+      const entry = pending.get(parsed.request_id)
+      if (!entry) return
       pending.delete(parsed.request_id)
+      // Even if the entry has expired, the user has explicitly clicked
+      // allow/deny — honor the decision.
       deps.sendMcpNotification(parsed)
     },
 
     hasPending(requestId) {
-      return pending.has(requestId)
+      const entry = pending.get(requestId)
+      if (!entry) return false
+      if (entry.expiresAt < Date.now()) {
+        pending.delete(requestId)
+        return false
+      }
+      return true
     },
   }
 }
