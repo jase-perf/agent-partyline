@@ -187,8 +187,13 @@ function resolveNameFromJsonlPath(path) {
   const m = path.match(/\/([0-9a-f-]+)\.jsonl$/)
   if (!m) return null
   const sid = m[1]
+  // Check metadata.status.sessionId first (populated after first session-update).
+  // Fall back to cc_session_uuid from the snapshot so JSONL events that arrive
+  // before the first session-update are not silently dropped.
   const found = lastSessions.find(
-    (s) => s.metadata && s.metadata.status && s.metadata.status.sessionId === sid,
+    (s) =>
+      (s.metadata && s.metadata.status && s.metadata.status.sessionId === sid) ||
+      s.cc_session_uuid === sid,
   )
   return found ? found.name : null
 }
@@ -334,7 +339,7 @@ function esc(s) {
 // Sending a ping every PING_INTERVAL_MS and expecting a pong within PONG_TIMEOUT_MS
 // ensures we detect and close dead connections within ~35 seconds.
 const PING_INTERVAL_MS = 25_000
-const PONG_TIMEOUT_MS = 10_000
+const PONG_TIMEOUT_MS = 20_000
 let wsGen = 0 // bumped on each new socket; stale handlers compare before acting
 let reconnectTimer = null
 let pingInterval = null
@@ -3358,16 +3363,19 @@ function addHookOption(hookEvent) {
 }
 
 // Live-append a new hook event to the History → Events list when it arrives
-// via WebSocket. Noop until the list has been loaded at least once.
+// via WebSocket. Always records to historyEvents so loadHistoryView() can
+// render them later; only mutates the DOM if the history list is already
+// loaded (historyLoaded guard was previously on the outer function which
+// silently dropped events from all other paths — unread counters, etc.).
 function handleHookEvent(ev) {
+  addHookOption(ev.hook_event)
+  historyEvents.unshift(ev)
   if (!historyLoaded) return
   var list = document.getElementById('history-list')
   if (!list) return
   // Skip the "No events" placeholder if present.
   var placeholder = list.querySelector('.history-empty')
   if (placeholder) placeholder.remove()
-  addHookOption(ev.hook_event)
-  historyEvents.unshift(ev)
   var li = buildHistoryItem(ev)
   if (list.firstChild) list.insertBefore(li, list.firstChild)
   else list.appendChild(li)

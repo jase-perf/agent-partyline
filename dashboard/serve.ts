@@ -1165,7 +1165,7 @@ const server = Bun.serve({
           token?: string
         }
       | undefined,
-    idleTimeout: 30, // seconds; Bun kicks silent connections after this
+    idleTimeout: 120, // seconds; observers ping every 25s so 120s gives plenty of margin
     maxPayloadLength: 1024 * 1024, // 1 MiB cap; Bun closes connections that exceed
     open(ws) {
       const kind = ws.data?.kind
