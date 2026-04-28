@@ -4459,7 +4459,14 @@ window.addEventListener('pageshow', (e) => {
   }
 })
 
-window.addEventListener('focus', refreshNotifState)
+// Android Chrome often skips visibilitychange when switching browser tabs;
+// window focus is more reliable there.
+window.addEventListener('focus', () => {
+  if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+    connect()
+  }
+  refreshNotifState()
+})
 
 if (navigator.permissions && navigator.permissions.query) {
   navigator.permissions

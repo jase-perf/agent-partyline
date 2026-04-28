@@ -524,7 +524,7 @@ const server = Bun.serve({
       if (req.method !== 'GET')
         return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET' } })
       return new Response(Bun.file(dashboardCssPath), {
-        headers: { 'Content-Type': 'text/css' },
+        headers: { 'Content-Type': 'text/css', 'Cache-Control': 'no-cache' },
       })
     }
 
@@ -1122,28 +1122,28 @@ const server = Bun.serve({
       if (req.method !== 'GET')
         return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET' } })
       return new Response(Bun.file(dashboardJsPath), {
-        headers: { 'Content-Type': 'application/javascript' },
+        headers: { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache' },
       })
     }
     if (url.pathname === '/notifications.js') {
       if (req.method !== 'GET')
         return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET' } })
       return new Response(Bun.file(notificationsJsPath), {
-        headers: { 'Content-Type': 'application/javascript' },
+        headers: { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache' },
       })
     }
     if (url.pathname === '/transcript-grouping.js') {
       if (req.method !== 'GET')
         return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET' } })
       return new Response(Bun.file(transcriptGroupingJsPath), {
-        headers: { 'Content-Type': 'application/javascript' },
+        headers: { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache' },
       })
     }
     if (url.pathname === '/tabs-state.js') {
       if (req.method !== 'GET')
         return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET' } })
       return new Response(Bun.file(tabsStateJsPath), {
-        headers: { 'Content-Type': 'application/javascript' },
+        headers: { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache' },
       })
     }
 
