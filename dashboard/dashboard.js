@@ -335,6 +335,8 @@ function esc(s) {
 // ensures we detect and close dead connections within ~35 seconds.
 const PING_INTERVAL_MS = 25_000
 const PONG_TIMEOUT_MS = 10_000
+let wsGen = 0 // bumped on each new socket; stale handlers compare before acting
+let reconnectTimer = null
 let pingInterval = null
 let pongTimer = null
 
@@ -349,10 +351,10 @@ function clearKeepalive() {
   }
 }
 
-function startKeepalive(socket) {
+function startKeepalive(socket, gen) {
   clearKeepalive()
   pingInterval = setInterval(() => {
-    if (socket.readyState !== WebSocket.OPEN) {
+    if (gen !== wsGen || socket.readyState !== WebSocket.OPEN) {
       clearKeepalive()
       return
     }
@@ -364,6 +366,7 @@ function startKeepalive(socket) {
     // If no pong arrives within PONG_TIMEOUT_MS, the connection is a zombie:
     // close it so onclose fires and schedules a fresh reconnect.
     pongTimer = setTimeout(() => {
+      if (gen !== wsGen) return
       try {
         socket.close(1001, 'pong timeout')
       } catch {
@@ -374,16 +377,29 @@ function startKeepalive(socket) {
 }
 
 function connect() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  ws = new WebSocket(proto + '//' + location.host + '/ws/observer')
+  // Cancel any pending auto-reconnect.
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  // Don't stack connections: if one is already opening or open, bail.
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
 
-  ws.onopen = function () {
+  clearKeepalive()
+  const gen = ++wsGen
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const socket = new WebSocket(proto + '//' + location.host + '/ws/observer')
+  ws = socket
+
+  socket.onopen = function () {
+    if (gen !== wsGen) return // superseded by a later connect()
     connStatus.textContent = 'connected'
     connStatus.style.color = '#3fb950'
-    startKeepalive(ws)
+    startKeepalive(socket, gen)
   }
 
-  ws.onclose = function (e) {
+  socket.onclose = function (e) {
+    if (gen !== wsGen) return // stale socket — a newer one owns the session
     clearKeepalive()
     // Auth failure: only the explicit 4401 close code from the switchboard
     // indicates the dashboard cookie was rejected. Code 1006 means "abnormal
@@ -400,10 +416,11 @@ function connect() {
     connStatus.textContent = 'reconnecting\u2026'
     connStatus.style.color = 'var(--yellow)'
     sessionsReady = false
-    setTimeout(connect, 2000)
+    reconnectTimer = setTimeout(connect, 2000)
   }
 
-  ws.onmessage = function (e) {
+  socket.onmessage = function (e) {
+    if (gen !== wsGen) return // stale socket — drop its messages
     var data
     try {
       data = JSON.parse(e.data)
