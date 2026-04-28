@@ -46,6 +46,10 @@
 html,
 body {
   height: 100%;
+  /* iOS Safari: overflow:hidden on body alone doesn't stop viewport scroll.
+   * Setting it on html too prevents the document from panning horizontally
+   * when any child (e.g. a wide tab strip) exceeds the screen width. */
+  overflow: hidden;
 }
 body {
   font-family:
@@ -2766,6 +2770,10 @@ section[data-view='switchboard'] .switchboard-wrap {
   border-bottom: 1px solid var(--border);
   padding: 0;
   flex: 0 0 auto;
+  /* Clip tab overflow at the strip level so excess tabs never widen the page.
+   * The .tab-strip-overflow-menu is position:absolute so it escapes this. */
+  overflow: hidden;
+  width: 100%;
 }
 .tab-strip-tab {
   background: transparent;
