@@ -328,6 +328,51 @@ function esc(s) {
   return el.innerHTML
 }
 
+// Keepalive state for the current observer WebSocket.
+// A zombie WS (TCP dropped, browser hasn't noticed) stays OPEN indefinitely:
+// onclose never fires, visibilitychange sees OPEN, updates stop silently.
+// Sending a ping every PING_INTERVAL_MS and expecting a pong within PONG_TIMEOUT_MS
+// ensures we detect and close dead connections within ~35 seconds.
+const PING_INTERVAL_MS = 25_000
+const PONG_TIMEOUT_MS = 10_000
+let pingInterval = null
+let pongTimer = null
+
+function clearKeepalive() {
+  if (pingInterval !== null) {
+    clearInterval(pingInterval)
+    pingInterval = null
+  }
+  if (pongTimer !== null) {
+    clearTimeout(pongTimer)
+    pongTimer = null
+  }
+}
+
+function startKeepalive(socket) {
+  clearKeepalive()
+  pingInterval = setInterval(() => {
+    if (socket.readyState !== WebSocket.OPEN) {
+      clearKeepalive()
+      return
+    }
+    try {
+      socket.send(JSON.stringify({ type: 'ping' }))
+    } catch {
+      return
+    }
+    // If no pong arrives within PONG_TIMEOUT_MS, the connection is a zombie:
+    // close it so onclose fires and schedules a fresh reconnect.
+    pongTimer = setTimeout(() => {
+      try {
+        socket.close(1001, 'pong timeout')
+      } catch {
+        /* ignore */
+      }
+    }, PONG_TIMEOUT_MS)
+  }, PING_INTERVAL_MS)
+}
+
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   ws = new WebSocket(proto + '//' + location.host + '/ws/observer')
@@ -335,9 +380,11 @@ function connect() {
   ws.onopen = function () {
     connStatus.textContent = 'connected'
     connStatus.style.color = '#3fb950'
+    startKeepalive(ws)
   }
 
   ws.onclose = function (e) {
+    clearKeepalive()
     // Auth failure: only the explicit 4401 close code from the switchboard
     // indicates the dashboard cookie was rejected. Code 1006 means "abnormal
     // closure" and fires on every mobile background/screen-lock/network blip
@@ -376,6 +423,15 @@ function connect() {
       ) {
         return
       }
+    }
+
+    if (data.type === 'pong') {
+      // Clear the pong timeout so the connection isn't force-closed.
+      if (pongTimer !== null) {
+        clearTimeout(pongTimer)
+        pongTimer = null
+      }
+      return
     }
 
     if (data.type === 'sessions-snapshot') {
