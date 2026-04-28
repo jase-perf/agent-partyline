@@ -4356,14 +4356,26 @@ function updatePermissionCardResolved(data) {
   }
 }
 
-// When the tab becomes visible again, dispatch session-viewed for the current
-// session (if any) so any pending notifications for it get dismissed.
-// Also refresh permission state in case it changed in another tab.
+// When the tab becomes visible again, reconnect the observer WebSocket if it
+// dropped while backgrounded. On iOS, setTimeout timers are suspended during
+// PWA hibernation, so the scheduled 2-second reconnect never fires — the WS
+// stays dead until the user force-quits. Checking explicitly on wake fixes this.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return
+  if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+    connect()
+  }
   if (!focusedTabName) return
   notif.dispatchSessionViewed(focusedTabName)
   refreshNotifState()
+})
+
+// pageshow fires when iOS restores a page from bfcache (full JS suspension).
+// visibilitychange may already have fired, but ws.readyState check is cheap.
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted && (!ws || ws.readyState !== WebSocket.OPEN)) {
+    connect()
+  }
 })
 
 window.addEventListener('focus', refreshNotifState)
